@@ -1,25 +1,36 @@
-const el = (id) => document.getElementById(id);
-const logEl = el("log");
-function log(line) { logEl.textContent += line + "\n"; logEl.scrollTop = logEl.scrollHeight; }
-function resetLog() { logEl.textContent = ""; }
+// MAXSPAN app.js — SPAN + Bhav + Positions + Spread grouping (client-side)
 
+const el = (id) => document.getElementById(id);
+
+const logEl = el("log");
+function log(line) {
+  logEl.textContent += line + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function resetLog() {
+  logEl.textContent = "";
+}
+
+// Inputs
 const spanFileEl = el("spanFile");
 const bhavFileEl = el("bhavFile");
 const spanHint = el("spanHint");
 const bhavHint = el("bhavHint");
 
+// View selector
 const viewModeEl = el("viewMode");
 const loadBtn = el("loadBtn");
 const exportContractsBtn = el("exportContractsBtn");
 
+// Contracts controls
 const contractsView = el("contractsView");
 const portfolioView = el("portfolioView");
-
 const searchEl = el("search");
 const monthFilterEl = el("monthFilter");
 const typeFilterEl = el("typeFilter");
 const contractsTableBody = el("contractsTable").querySelector("tbody");
 
+// Positions controls
 const addRowBtn = el("addRowBtn");
 const calcBtn = el("calcBtn");
 const exportPosBtn = el("exportPosBtn");
@@ -27,6 +38,10 @@ const posTableBody = el("posTable").querySelector("tbody");
 const portfolioWorstEl = el("portfolioWorst");
 const scenarioLogEl = el("scenarioLog");
 const contributorsLogEl = el("contributorsLog");
+
+// Spread grouping UI
+const groupToggleEl = el("groupToggle");
+const spreadsLogEl = el("spreadsLog");
 
 // ---------- File helpers ----------
 function readFileAsText(file) {
@@ -50,9 +65,7 @@ function parseXml(xmlText) {
 const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
 
 function monthKeyFromBhavExpiry(expiryStr) {
-  // expiryStr like "27FEB2026" OR may contain spaces
   const s = String(expiryStr || "").toUpperCase().replace(/\s+/g,"");
-  // find MMMYYYY
   const mmm = MONTHS.find(m => s.includes(m));
   const yyyy = (s.match(/20\d{2}/) || [null])[0];
   if (!mmm || !yyyy) return null;
@@ -60,21 +73,24 @@ function monthKeyFromBhavExpiry(expiryStr) {
 }
 
 function monthKeyFromSpanPe(peStr) {
-  // pe like "20260130" => JAN-2026
   const s = String(peStr || "").trim();
   if (!/^\d{8}$/.test(s)) return null;
   const yyyy = s.slice(0,4);
-  const mm = Number(s.slice(4,6)); // 01-12
+  const mm = Number(s.slice(4,6));
   if (!(mm >= 1 && mm <= 12)) return null;
   return `${MONTHS[mm-1]}-${yyyy}`;
 }
 
 function num(v) {
-  const x = Number(String(v).replace(/,/g,"").trim());
+  const x = Number(String(v ?? "").replace(/,/g,"").trim());
   return Number.isFinite(x) ? x : null;
 }
 
-// ---------- Parse Bhav (your .xls is HTML table) ----------
+function normalizeSym(s) {
+  return String(s || "").toUpperCase().replace(/\s+/g, "");
+}
+
+// ---------- Parse Bhav (HTML-table .xls) ----------
 function parseBhavHtmlTable(htmlText) {
   const doc = new DOMParser().parseFromString(htmlText, "text/html");
   const table = doc.querySelector("table");
@@ -101,7 +117,8 @@ function parseBhavHtmlTable(htmlText) {
     const cells = Array.from(rows[r].querySelectorAll("td")).map(td => td.textContent.trim());
     if (!cells.length) continue;
 
-    const symbol = cells[iSymbol] || "";
+    const symbolRaw = cells[iSymbol] || "";
+    const symbol = normalizeSym(symbolRaw);
     const expiryRaw = cells[iExpiry] || "";
     const monthKey = monthKeyFromBhavExpiry(expiryRaw);
 
@@ -115,21 +132,20 @@ function parseBhavHtmlTable(htmlText) {
 
     if (!symbol || !monthKey) continue;
 
-    const type = (optType && optType !== "-" ? "OPT" : "FUT"); // bhav uses '-' for futures
+    const type = (optType && optType !== "-" ? "OPT" : "FUT");
+
     out.push({ symbol, monthKey, type, strike, close, oi, instr, expiryRaw, optType });
   }
 
   return out;
 }
 
-// Index bhav by key: symbol|month|type|strikeBucket
 function bhavKey(r) {
-  // For FUT, strike is 0
   const st = r.type === "OPT" ? Number(r.strike || 0).toFixed(2) : "0.00";
   return `${r.symbol}|${r.monthKey}|${r.type}|${st}`;
 }
 
-// ---------- Parse SPAN ----------
+// ---------- SPAN parsing helpers ----------
 function textOf(node, tag) {
   const n = node.getElementsByTagName(tag)[0];
   return n ? (n.textContent ?? "").trim() : "";
@@ -138,7 +154,7 @@ function textOf(node, tag) {
 function raArray(contractNode) {
   const ra = contractNode.getElementsByTagName("ra")[0];
   if (!ra) return null;
-  // In your file <ra><r>1</r><a>..</a>...</ra> ; we take numeric children except <r> or <d>
+
   const arr = [];
   for (const ch of Array.from(ra.children)) {
     const name = ch.tagName.toLowerCase();
@@ -158,32 +174,53 @@ function worstAbs(arr) {
   return m;
 }
 
-// Build contract rows from <futPf> and <optPf>
+function buildPfIdToCode(spanDoc) {
+  const map = new Map();
+
+  const allPf = [
+    ...Array.from(spanDoc.getElementsByTagName("phyPf")),
+    ...Array.from(spanDoc.getElementsByTagName("futPf")),
+    ...Array.from(spanDoc.getElementsByTagName("optPf")),
+  ];
+
+  for (const pf of allPf) {
+    const pfId = textOf(pf, "pfId");
+    const pfCode = textOf(pf, "pfCode");
+    if (pfId && pfCode) map.set(String(pfId).trim(), normalizeSym(pfCode));
+  }
+  return map;
+}
+
+// Extract ALL futures/options from the whole SPAN file
 function extractSpanContracts(spanDoc) {
+  const pfIdToCode = buildPfIdToCode(spanDoc);
   const rows = [];
 
-  // FUT portfolios
-  const futPfs = Array.from(spanDoc.getElementsByTagName("futPf"));
-  for (const pf of futPfs) {
-    const symbol = textOf(pf, "pfCode");
-    const fut = pf.getElementsByTagName("fut")[0];
-    if (!fut) continue;
-
+  // --- FUT ---
+  const futNodes = Array.from(spanDoc.getElementsByTagName("fut"));
+  for (const fut of futNodes) {
     const pe = textOf(fut, "pe");
     const monthKey = monthKeyFromSpanPe(pe) || "UNK";
-    const scan = num(textOf(fut, "priceScan")) ?? null; // sometimes nested; handle below
+
     const ra = raArray(fut);
     if (!ra) continue;
 
-    // priceScan is actually under <scanRate><priceScan>
+    // underlying pfId in <undC>
+    const undC = fut.getElementsByTagName("undC")[0];
+    const undPfId = undC ? textOf(undC, "pfId") : "";
+    const symbol = pfIdToCode.get(String(undPfId).trim()) || "";
+
     const scanRate = fut.getElementsByTagName("scanRate")[0];
     const priceScan = scanRate ? (num(textOf(scanRate, "priceScan")) ?? null) : null;
+
+    if (!symbol) continue;
 
     rows.push({
       symbol,
       monthKey,
       type: "FUT",
       strike: 0,
+      optCp: "",
       pe,
       priceScan,
       ra,
@@ -191,31 +228,33 @@ function extractSpanContracts(spanDoc) {
     });
   }
 
-  // OPT portfolios (if present)
-  const optPfs = Array.from(spanDoc.getElementsByTagName("optPf"));
-  for (const pf of optPfs) {
-    const symbol = textOf(pf, "pfCode");
-    const opt = pf.getElementsByTagName("opt")[0];
-    if (!opt) continue;
-
+  // --- OPT ---
+  const optNodes = Array.from(spanDoc.getElementsByTagName("opt"));
+  for (const opt of optNodes) {
     const pe = textOf(opt, "pe");
     const monthKey = monthKeyFromSpanPe(pe) || "UNK";
-    const strike = num(textOf(opt, "k")) ?? 0;
-    const cp = (textOf(opt, "o") || "").toUpperCase(); // C/P
-    const type = "OPT";
-
-    const scanRate = opt.getElementsByTagName("scanRate")[0];
-    const priceScan = scanRate ? (num(textOf(scanRate, "priceScan")) ?? null) : null;
 
     const ra = raArray(opt);
     if (!ra) continue;
 
+    const strike = num(textOf(opt, "k")) ?? 0;
+    const cp = (textOf(opt, "o") || "").toUpperCase(); // C/P
+
+    const undC = opt.getElementsByTagName("undC")[0];
+    const undPfId = undC ? textOf(undC, "pfId") : "";
+    const symbol = pfIdToCode.get(String(undPfId).trim()) || "";
+
+    const scanRate = opt.getElementsByTagName("scanRate")[0];
+    const priceScan = scanRate ? (num(textOf(scanRate, "priceScan")) ?? null) : null;
+
+    if (!symbol) continue;
+
     rows.push({
       symbol,
       monthKey,
-      type,
-      optCp: cp,
+      type: "OPT",
       strike,
+      optCp: cp,
       pe,
       priceScan,
       ra,
@@ -223,7 +262,18 @@ function extractSpanContracts(spanDoc) {
     });
   }
 
-  return rows;
+  // Deduplicate (sometimes appears twice)
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    const st = r.type === "OPT" ? Number(r.strike || 0).toFixed(2) : "0.00";
+    const key = `${r.symbol}|${r.monthKey}|${r.type}|${st}|${r.optCp || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+
+  return out;
 }
 
 function spanKey(r) {
@@ -232,13 +282,12 @@ function spanKey(r) {
 }
 
 // ---------- Global state ----------
-let bhavIndex = new Map();   // key -> bhav row
-let spanRows = [];           // span rows enriched
-let months = [];             // month list for filter
+let bhavIndex = new Map();  // key -> bhav row
+let spanRows = [];          // span rows enriched with close/oi
+let months = [];            // month filter
+let symbols = [];           // symbol list for positions dropdown
 
-// ---------- Render ----------
-function clearTable(tbody) { tbody.innerHTML = ""; }
-
+// ---------- UI toggles ----------
 function setView(view) {
   if (view === "contracts") {
     contractsView.classList.add("is-active");
@@ -258,22 +307,30 @@ bhavFileEl.addEventListener("change", () => {
   bhavHint.textContent = bhavFileEl.files?.[0]?.name || "No file selected";
 });
 
+// Tabs (MCX only active)
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    document.querySelectorAll(".tab").forEach(b => b.classList.remove("is-active"));
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("is-active"));
+    btn.classList.add("is-active");
+    el(btn.dataset.tab).classList.add("is-active");
+  });
+});
+
+// ---------- Contracts rendering ----------
+function clearTable(tbody) { tbody.innerHTML = ""; }
+
 function buildMonthFilter(rows) {
   const set = new Set(rows.map(r => r.monthKey).filter(Boolean));
   months = Array.from(set).sort((a,b) => a.localeCompare(b));
-  monthFilterEl.innerHTML = `<option value="">All</option>` + months.map(m => `<option value="${m}">${m}</option>`).join("");
+  monthFilterEl.innerHTML =
+    `<option value="">All</option>` + months.map(m => `<option value="${m}">${m}</option>`).join("");
 }
 
-function enrichWithBhav(rows) {
-  return rows.map(r => {
-    const b = bhavIndex.get(spanKey(r)) || null;
-    return {
-      ...r,
-      close: b?.close ?? null,
-      oi: b?.oi ?? null,
-      bhavExpiry: b?.expiryRaw ?? null,
-    };
-  });
+function buildSymbolList(rows) {
+  const set = new Set(rows.map(r => r.symbol).filter(Boolean));
+  symbols = Array.from(set).sort((a,b) => a.localeCompare(b));
 }
 
 function renderContracts() {
@@ -339,9 +396,7 @@ function toCsv(rows, headers) {
   };
   const lines = [];
   lines.push(headers.map(esc).join(","));
-  for (const r of rows) {
-    lines.push(headers.map(h => esc(r[h])).join(","));
-  }
+  for (const r of rows) lines.push(headers.map(h => esc(r[h])).join(","));
   return lines.join("\n");
 }
 
@@ -373,10 +428,15 @@ function makeSelect(options, value="") {
   return s;
 }
 
+function tdWrap(node) {
+  const td = document.createElement("td");
+  td.appendChild(node);
+  return td;
+}
+
 function addPosRow(prefill = {}) {
   const tr = document.createElement("tr");
 
-  const symbols = Array.from(new Set(spanRows.map(r => r.symbol))).sort();
   const monthOpts = [{value:"",label:"Select"}].concat(months.map(m => ({value:m,label:m})));
   const symOpts = [{value:"",label:"Select"}].concat(symbols.map(s => ({value:s,label:s})));
 
@@ -396,14 +456,17 @@ function addPosRow(prefill = {}) {
   lotsInput.value = prefill.lots ?? 0;
   lotsInput.placeholder = "+ long / - short";
 
-  const closeTd = document.createElement("td"); closeTd.className="mono"; closeTd.textContent="—";
-  const oiTd = document.createElement("td"); oiTd.className="mono"; oiTd.textContent="—";
+  const closeTd = document.createElement("td"); closeTd.className = "mono"; closeTd.textContent="—";
+  const oiTd = document.createElement("td"); oiTd.className = "mono"; oiTd.textContent="—";
   const impactTd = document.createElement("td"); impactTd.className="mono"; impactTd.textContent="—";
 
   const delBtn = document.createElement("button");
   delBtn.className = "btn";
   delBtn.textContent = "Remove";
-  delBtn.addEventListener("click", () => { tr.remove(); recomputeRow(); });
+  delBtn.addEventListener("click", () => {
+    tr.remove();
+    refreshSpreadGroups();
+  });
 
   function recomputeRow() {
     const sym = symSel.value;
@@ -412,7 +475,7 @@ function addPosRow(prefill = {}) {
     const strike = num(strikeInput.value) ?? 0;
     const lots = num(lotsInput.value) ?? 0;
 
-    // Map to span contract (for OPT strike matching)
+    // Match to span row
     const key = `${sym}|${month}|${type}|${type==="OPT" ? strike.toFixed(2) : "0.00"}`;
     const span = spanRows.find(r => spanKey(r) === key) || null;
 
@@ -423,14 +486,15 @@ function addPosRow(prefill = {}) {
     oiTd.textContent = oi == null ? "—" : String(oi);
 
     if (span && span.ra && span.ra.length && lots !== 0) {
-      const imp = span.worst * Math.abs(lots);
-      impactTd.textContent = imp.toFixed(2);
+      impactTd.textContent = (span.worst * Math.abs(lots)).toFixed(2);
     } else {
       impactTd.textContent = "—";
     }
 
     calcBtn.disabled = posTableBody.querySelectorAll("tr").length === 0;
     exportPosBtn.disabled = posTableBody.querySelectorAll("tr").length === 0;
+
+    refreshSpreadGroups();
   }
 
   [symSel, monthSel, typeSel].forEach(x => x.addEventListener("change", recomputeRow));
@@ -453,12 +517,6 @@ function addPosRow(prefill = {}) {
   recomputeRow();
 }
 
-function tdWrap(node) {
-  const td = document.createElement("td");
-  td.appendChild(node);
-  return td;
-}
-
 addRowBtn.addEventListener("click", () => addPosRow());
 
 exportPosBtn.addEventListener("click", () => {
@@ -476,13 +534,85 @@ exportPosBtn.addEventListener("click", () => {
   downloadText("positions.csv", csv, "text/csv");
 });
 
+// ---------- Spread grouping ----------
+function groupKeyForPos(p) {
+  if (p.type === "FUT") return `${p.symbol}|FUT`;
+  const st = Number(p.strike || 0).toFixed(2);
+  return `${p.symbol}|OPT|${st}`; // (CP can be added later if needed)
+}
+
+function groupLabel(key) {
+  const parts = key.split("|");
+  if (parts[1] === "FUT") return `${parts[0]} FUT`;
+  return `${parts[0]} OPT ${parts[2]}`;
+}
+
+function readPositionsFromTable() {
+  const out = [];
+  for (const tr of Array.from(posTableBody.querySelectorAll("tr"))) {
+    const tds = tr.querySelectorAll("td");
+    const symbol = tds[0].querySelector("select")?.value || "";
+    const month = tds[1].querySelector("select")?.value || "";
+    const type = tds[2].querySelector("select")?.value || "";
+    const strike = num(tds[3].querySelector("input")?.value) ?? 0;
+    const lots = num(tds[4].querySelector("input")?.value) ?? 0;
+    if (!symbol || !month || !type || lots === 0) continue;
+    out.push({symbol, month, type, strike, lots});
+  }
+  return out;
+}
+
+function refreshSpreadGroups() {
+  if (!spreadsLogEl) return;
+  spreadsLogEl.textContent = "";
+
+  if (!groupToggleEl?.checked) return;
+
+  const positions = readPositionsFromTable();
+  if (positions.length === 0) return;
+
+  const groups = new Map();
+
+  for (const p of positions) {
+    const gk = groupKeyForPos(p);
+    if (!groups.has(gk)) groups.set(gk, []);
+    groups.get(gk).push(p);
+  }
+
+  const lines = [];
+  for (const [gk, legs] of groups.entries()) {
+    const netLots = legs.reduce((s, x) => s + x.lots, 0);
+    lines.push(`${groupLabel(gk)}  | legs=${legs.length} | netLots=${netLots}`);
+
+    // Sort legs by month label
+    legs.sort((a,b) => String(a.month).localeCompare(String(b.month)));
+
+    for (const leg of legs) {
+      const key = `${leg.symbol}|${leg.month}|${leg.type}|${leg.type==="OPT" ? leg.strike.toFixed(2) : "0.00"}`;
+      const span = spanRows.find(r => spanKey(r) === key) || null;
+      const worst = span ? span.worst : null;
+      const close = span?.close ?? null;
+
+      const wtxt = worst == null ? "—" : (worst * Math.abs(leg.lots)).toFixed(2);
+      const ctxt = close == null ? "—" : close.toFixed(2);
+
+      lines.push(`  - ${leg.month} | lots=${leg.lots} | close=${ctxt} | absImpact≈${wtxt}`);
+    }
+
+    lines.push("");
+  }
+
+  spreadsLogEl.textContent = lines.join("\n");
+}
+
+groupToggleEl?.addEventListener("change", refreshSpreadGroups);
+
 // ---------- Portfolio calc ----------
 calcBtn.addEventListener("click", () => {
   scenarioLogEl.textContent = "";
   contributorsLogEl.textContent = "";
   portfolioWorstEl.textContent = "—";
 
-  // Find scenario length from first span row
   const first = spanRows.find(r => r.ra && r.ra.length);
   if (!first) { log("❌ No ra arrays found in SPAN."); return; }
   const L = first.ra.length;
@@ -490,17 +620,10 @@ calcBtn.addEventListener("click", () => {
   const portfolio = new Array(L).fill(0);
   const contribs = [];
 
-  for (const tr of Array.from(posTableBody.querySelectorAll("tr"))) {
-    const tds = tr.querySelectorAll("td");
-    const sym = tds[0].querySelector("select")?.value || "";
-    const month = tds[1].querySelector("select")?.value || "";
-    const type = tds[2].querySelector("select")?.value || "";
-    const strike = num(tds[3].querySelector("input")?.value) ?? 0;
-    const lots = num(tds[4].querySelector("input")?.value) ?? 0;
+  const positions = readPositionsFromTable();
 
-    if (!sym || !month || !type || lots === 0) continue;
-
-    const key = `${sym}|${month}|${type}|${type==="OPT" ? strike.toFixed(2) : "0.00"}`;
+  for (const p of positions) {
+    const key = `${p.symbol}|${p.month}|${p.type}|${p.type==="OPT" ? p.strike.toFixed(2) : "0.00"}`;
     const span = spanRows.find(r => spanKey(r) === key) || null;
 
     if (!span) {
@@ -508,26 +631,16 @@ calcBtn.addEventListener("click", () => {
       continue;
     }
 
-    // Add scenario vector * lots
     const local = new Array(L).fill(0);
     for (let i = 0; i < L; i++) {
-      const v = (span.ra[i] ?? 0) * lots;
+      const v = (span.ra[i] ?? 0) * p.lots;
       portfolio[i] += v;
       local[i] = v;
     }
 
-    contribs.push({
-      key,
-      worstAbs: worstAbs(local),
-      symbol: sym,
-      month,
-      type,
-      strike: type==="OPT" ? strike.toFixed(2) : "",
-      lots
-    });
+    contribs.push({ key, worstAbs: worstAbs(local), lots: p.lots });
   }
 
-  // worst scenario = max abs value in portfolio vector
   let worst = 0;
   let worstIdx = 0;
   for (let i = 0; i < L; i++) {
@@ -536,25 +649,28 @@ calcBtn.addEventListener("click", () => {
   }
 
   portfolioWorstEl.textContent = `${worst.toFixed(2)} (scenario #${worstIdx+1})`;
-
   scenarioLogEl.textContent = portfolio.slice(0, 20).map((v,i) => `S${i+1}: ${v.toFixed(2)}`).join("\n");
 
   contribs.sort((a,b) => b.worstAbs - a.worstAbs);
   contributorsLogEl.textContent = contribs.slice(0, 15).map(c =>
     `${c.key} | lots=${c.lots} | abs-impact=${c.worstAbs.toFixed(2)}`
   ).join("\n");
+
+  refreshSpreadGroups();
 });
 
 // ---------- Load files ----------
 loadBtn.addEventListener("click", async () => {
   resetLog();
-  spanRows = [];
   bhavIndex.clear();
+  spanRows = [];
   clearTable(contractsTableBody);
   posTableBody.innerHTML = "";
   portfolioWorstEl.textContent = "—";
   scenarioLogEl.textContent = "";
   contributorsLogEl.textContent = "";
+  spreadsLogEl.textContent = "";
+
   exportContractsBtn.disabled = true;
   calcBtn.disabled = true;
   exportPosBtn.disabled = true;
@@ -569,7 +685,8 @@ loadBtn.addEventListener("click", async () => {
     log(`Reading SPAN: ${spanFile.name}`);
     const spanText = await readFileAsText(spanFile);
     const spanDoc = parseXml(spanText);
-    let baseRows = extractSpanContracts(spanDoc);
+
+    const baseRows = extractSpanContracts(spanDoc);
     log(`SPAN contracts with ra: ${baseRows.length}`);
 
     log(`Reading Bhav: ${bhavFile.name}`);
@@ -577,20 +694,15 @@ loadBtn.addEventListener("click", async () => {
     const bhavRows = parseBhavHtmlTable(bhavText);
     log(`Bhav rows parsed: ${bhavRows.length}`);
 
-    // index bhav
     for (const r of bhavRows) bhavIndex.set(bhavKey(r), r);
 
-    // enrich: try direct match by symbol+month+type(+strike)
-    // Note: Bhav strike is available for OPT; for FUT strike is 0
-    // If strike mismatch occurs for OPT due to formatting, we can extend later.
-    baseRows = baseRows.map(r => {
-      const key = spanKey(r);
-      const b = bhavIndex.get(key) || null;
+    spanRows = baseRows.map(r => {
+      const b = bhavIndex.get(spanKey(r)) || null;
       return { ...r, close: b?.close ?? null, oi: b?.oi ?? null };
     });
 
-    spanRows = baseRows;
     buildMonthFilter(spanRows);
+    buildSymbolList(spanRows);
 
     renderContracts();
     exportContractsBtn.disabled = spanRows.length === 0;
