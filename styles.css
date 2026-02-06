@@ -118,3 +118,20 @@ hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
   .row { flex-direction: column; align-items: stretch; }
   .actions { margin-left: 0; }
 }
+.view { display: none; }
+.view.is-active { display: block; }
+
+.tableWrap { margin-top: 12px; overflow: auto; border-radius: 14px; border: 1px solid var(--border); }
+.table { width: 100%; border-collapse: collapse; min-width: 860px; background: rgba(0,0,0,0.10); }
+.table th, .table td { padding: 10px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.table th { text-align: left; color: var(--muted); font-weight: 600; background: rgba(255,255,255,0.04); position: sticky; top: 0; }
+
+.bigNumber { font-size: 22px; font-weight: 800; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--border); background: rgba(125,211,252,0.10); }
+input[type="text"], input[type="number"] {
+  width: 100%;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.22);
+  color: var(--text);
+}
