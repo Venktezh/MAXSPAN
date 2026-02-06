@@ -156,18 +156,13 @@ function parseBhavHtmlTable(htmlText) {
 
     const volLots = (iVolLots >= 0 ? num(cells[iVolLots]) : null);
     const volQtyRaw = (iVolQty >= 0 ? (cells[iVolQty] || "") : "");
-    const volQty = num(volQtyRaw);
+    const volLots = (iVolLots >= 0 ? num(cells[iVolLots]) : null);
 
     if (!symbol || !monthKey) continue;
 
     const type = (optType && optType !== "-" ? "OPT" : "FUT");
 
-    out.push({
-      symbol, monthKey, type, strike,
-      close, oi, instr, expiryRaw, optType,
-      volLots, volQty
-    });
-  }
+    out.push({ ... , volLots, volQtyRaw });
 
   return out;
 }
@@ -696,6 +691,43 @@ loadBtn.addEventListener("click", async () => {
   bhavIndex.clear();
   spanRows = [];
   BHAV_LOT_MULTIPLIER.clear();
+
+function parseVolIn000sToQty(volQtyRaw) {
+  // Example: "177300.000 GRMS" or "4245.000 KGS"
+  // Column name says (In 000's), so multiply numeric by 1000
+  const base = num(volQtyRaw);
+  if (base == null) return null;
+  return base * 1000;
+}
+
+const bucket = new Map(); // symbol -> [mult...]
+
+for (const r of bhavRows) {
+  if (!r.symbol) continue;
+
+  const lots = r.volLots;
+  if (!lots || lots <= 0) continue;
+
+  const qty = parseVolIn000sToQty(r.volQtyRaw); // store raw string in parsing
+  if (!qty || qty <= 0) continue;
+
+  const mult = qty / lots;
+  if (!Number.isFinite(mult) || mult <= 0) continue;
+
+  if (!bucket.has(r.symbol)) bucket.set(r.symbol, []);
+  bucket.get(r.symbol).push(mult);
+}
+
+// Use ONE multiplier per symbol: robust rounded median
+for (const [sym, arr] of bucket.entries()) {
+  const m = median(arr);
+  if (m == null) continue;
+  const rounded = Math.round(m);   // expect clean numbers like 10, 100, 1
+  BHAV_LOT_MULTIPLIER.set(sym, rounded);
+}
+
+log(`Bhav lot multipliers derived (per symbol): ${BHAV_LOT_MULTIPLIER.size}`);
+
 
   clearTable(contractsTableBody);
   posTableBody.innerHTML = "";
