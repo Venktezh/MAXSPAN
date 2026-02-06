@@ -103,12 +103,18 @@
 
         <!-- PORTFOLIO VIEW -->
         <div id="portfolioView" class="view">
-          <div class="row" style="margin-top:0">
+          <div class="row" style="margin-top:0; align-items:center;">
             <div class="actions" style="margin-left:0">
               <button id="addRowBtn" class="btn btn-primary">Add position</button>
               <button id="calcBtn" class="btn" disabled>Calculate portfolio</button>
               <button id="exportPosBtn" class="btn" disabled>Export positions CSV</button>
             </div>
+
+            <!-- ✅ Spread grouping toggle -->
+            <label class="label" style="display:flex; align-items:center; gap:8px; margin-left:12px; margin-bottom:0;">
+              <input id="groupToggle" type="checkbox" checked />
+              Group by Symbol (spreads)
+            </label>
 
             <div style="margin-left:auto; min-width: 240px">
               <label class="label">Portfolio worst scenario</label>
@@ -133,6 +139,12 @@
               </thead>
               <tbody></tbody>
             </table>
+          </div>
+
+          <!-- ✅ Grouped spreads output -->
+          <div class="logWrap" style="margin-top:12px">
+            <div class="label">Spread groups</div>
+            <pre id="spreadsLog" class="log"></pre>
           </div>
 
           <div class="grid2" style="margin-top:12px">
@@ -175,7 +187,7 @@
     <span>Runs fully in your browser — files are not uploaded anywhere.</span>
   </footer>
 
-  <!-- IMPORTANT: app.js must be separate. DO NOT paste JS into index.html -->
+  <!-- Keep JS separate -->
   <script src="app.js"></script>
 </body>
 </html>
