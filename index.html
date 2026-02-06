@@ -21,73 +21,131 @@
       <button class="tab" data-tab="bse" disabled title="Coming soon">BSE</button>
     </nav>
 
-    <section id="mcx" class="panel is-active">
-      <h1>MCX – SPAN Compare</h1>
+    <div class="card">
+  <div class="grid2">
+    <div>
+      <label class="label">SPAN file (.spn / .xml) — Current or MAX</label>
+      <input id="spanFile" type="file" accept=".spn,.xml,application/xml,text/xml" />
+      <div class="hint" id="spanHint">No file selected</div>
+    </div>
 
-      <div class="card">
-        <div class="grid2">
-          <div>
-            <label class="label">BOD SPAN file (.spn / .xml)</label>
-            <input id="bodFile" type="file" accept=".spn,.xml,application/xml,text/xml" />
-            <div class="hint" id="bodHint">No file selected</div>
-          </div>
-          <div>
-            <label class="label">Current (Intra-day) SPAN file (.spn / .xml)</label>
-            <input id="curFile" type="file" accept=".spn,.xml,application/xml,text/xml" />
-            <div class="hint" id="curHint">No file selected</div>
-          </div>
-        </div>
+    <div>
+      <label class="label">Bhav copy (.xls / .html table export)</label>
+      <input id="bhavFile" type="file" accept=".xls,.html,.htm,text/html,application/vnd.ms-excel" />
+      <div class="hint" id="bhavHint">No file selected</div>
+    </div>
+  </div>
 
-        <div class="row">
-          <div>
-            <label class="label">Output mode</label>
-            <select id="mode">
-              <option value="max" selected>MAX(BOD, Current)</option>
-              <option value="bod">BOD only</option>
-              <option value="current">Current only</option>
-            </select>
-          </div>
+  <div class="row">
+    <div>
+      <label class="label">View</label>
+      <select id="viewMode">
+        <option value="contracts" selected>Readable SPAN (Contracts)</option>
+        <option value="portfolio">Positions & Portfolio Risk</option>
+      </select>
+    </div>
 
-          <div class="actions">
-            <button id="runBtn" class="btn btn-primary">Calculate</button>
-            <button id="downloadBtn" class="btn" disabled>Download output</button>
-          </div>
-        </div>
+    <div class="actions">
+      <button id="loadBtn" class="btn btn-primary">Load files</button>
+      <button id="exportContractsBtn" class="btn" disabled>Export contracts CSV</button>
+    </div>
+  </div>
 
-        <hr />
+  <hr />
 
-        <div class="grid3">
-          <div class="stat">
-            <div class="stat__label">Contracts indexed (BOD)</div>
-            <div class="stat__value" id="statBod">—</div>
-          </div>
-          <div class="stat">
-            <div class="stat__label">Contracts processed (Current)</div>
-            <div class="stat__value" id="statCur">—</div>
-          </div>
-          <div class="stat">
-            <div class="stat__label">Contracts maximized (matched)</div>
-            <div class="stat__value" id="statMaxed">—</div>
-          </div>
-          <div class="stat">
-            <div class="stat__label">New contracts kept (only in Current)</div>
-            <div class="stat__value" id="statNew">—</div>
-          </div>
-          <div class="stat">
-            <div class="stat__label">Mode</div>
-            <div class="stat__value" id="statMode">—</div>
-          </div>
-          <div class="stat">
-            <div class="stat__label">Output filename</div>
-            <div class="stat__value mono" id="statOut">—</div>
-          </div>
-        </div>
-
-        <div class="logWrap">
-          <div class="label">Log</div>
-          <pre id="log" class="log" aria-live="polite"></pre>
-        </div>
+  <!-- CONTRACTS VIEW -->
+  <div id="contractsView" class="view is-active">
+    <div class="row" style="margin-top:0">
+      <div style="flex:1">
+        <label class="label">Search</label>
+        <input id="search" type="text" placeholder="ALUMINI / GOLD / expiry / FUT / OPT..." />
       </div>
+      <div>
+        <label class="label">Filter Month</label>
+        <select id="monthFilter">
+          <option value="">All</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Type</label>
+        <select id="typeFilter">
+          <option value="">All</option>
+          <option value="FUT">FUT</option>
+          <option value="OPT">OPT</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="tableWrap">
+      <table class="table" id="contractsTable">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Month</th>
+            <th>Type</th>
+            <th>Strike</th>
+            <th>Close</th>
+            <th>OI</th>
+            <th>Scan</th>
+            <th>Worst(|ra|)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- PORTFOLIO VIEW -->
+  <div id="portfolioView" class="view">
+    <div class="row" style="margin-top:0">
+      <div class="actions" style="margin-left:0">
+        <button id="addRowBtn" class="btn btn-primary">Add position</button>
+        <button id="calcBtn" class="btn" disabled>Calculate portfolio</button>
+        <button id="exportPosBtn" class="btn" disabled>Export positions CSV</button>
+      </div>
+      <div style="margin-left:auto; min-width: 220px">
+        <label class="label">Portfolio worst scenario</label>
+        <div class="bigNumber" id="portfolioWorst">—</div>
+      </div>
+    </div>
+
+    <div class="tableWrap">
+      <table class="table" id="posTable">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Month</th>
+            <th>Type</th>
+            <th>Strike</th>
+            <th>Lots (+ long / - short)</th>
+            <th>Close</th>
+            <th>OI</th>
+            <th>Worst(|ra|) × lots</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="grid2" style="margin-top:12px">
+      <div class="logWrap">
+        <div class="label">Portfolio scenario vector (first 20)</div>
+        <pre id="scenarioLog" class="log"></pre>
+      </div>
+
+      <div class="logWrap">
+        <div class="label">Top contributors (by abs impact)</div>
+        <pre id="contributorsLog" class="log"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="logWrap">
+    <div class="label">Log</div>
+    <pre id="log" class="log" aria-live="polite"></pre>
+  </div>
+</div>
 
       <p class="note">
         This tool reads your SPAN XML and applies scenario-wise MAX across &lt;ra&gt; arrays using the key:
