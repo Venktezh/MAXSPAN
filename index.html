@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SPAN Tool (NSE / BSE / MCX)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="header">
+    <div class="brand">
+      <div class="brand__title">SPAN Tool</div>
+      <div class="brand__sub">NSE · BSE · MCX (starting with MCX)</div>
+    </div>
+  </header>
+
+  <main class="container">
+    <nav class="tabs" aria-label="Exchanges">
+      <button class="tab is-active" data-tab="mcx">MCX</button>
+      <button class="tab" data-tab="nse" disabled title="Coming soon">NSE</button>
+      <button class="tab" data-tab="bse" disabled title="Coming soon">BSE</button>
+    </nav>
+
+    <section id="mcx" class="panel is-active">
+      <h1>MCX – SPAN Compare</h1>
+
+      <div class="card">
+        <div class="grid2">
+          <div>
+            <label class="label">BOD SPAN file (.spn / .xml)</label>
+            <input id="bodFile" type="file" accept=".spn,.xml,application/xml,text/xml" />
+            <div class="hint" id="bodHint">No file selected</div>
+          </div>
+          <div>
+            <label class="label">Current (Intra-day) SPAN file (.spn / .xml)</label>
+            <input id="curFile" type="file" accept=".spn,.xml,application/xml,text/xml" />
+            <div class="hint" id="curHint">No file selected</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label class="label">Output mode</label>
+            <select id="mode">
+              <option value="max" selected>MAX(BOD, Current)</option>
+              <option value="bod">BOD only</option>
+              <option value="current">Current only</option>
+            </select>
+          </div>
+
+          <div class="actions">
+            <button id="runBtn" class="btn btn-primary">Calculate</button>
+            <button id="downloadBtn" class="btn" disabled>Download output</button>
+          </div>
+        </div>
+
+        <hr />
+
+        <div class="grid3">
+          <div class="stat">
+            <div class="stat__label">Contracts indexed (BOD)</div>
+            <div class="stat__value" id="statBod">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">Contracts processed (Current)</div>
+            <div class="stat__value" id="statCur">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">Contracts maximized (matched)</div>
+            <div class="stat__value" id="statMaxed">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">New contracts kept (only in Current)</div>
+            <div class="stat__value" id="statNew">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">Mode</div>
+            <div class="stat__value" id="statMode">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat__label">Output filename</div>
+            <div class="stat__value mono" id="statOut">—</div>
+          </div>
+        </div>
+
+        <div class="logWrap">
+          <div class="label">Log</div>
+          <pre id="log" class="log" aria-live="polite"></pre>
+        </div>
+      </div>
+
+      <p class="note">
+        This tool reads your SPAN XML and applies scenario-wise MAX across &lt;ra&gt; arrays using the key:
+        <span class="mono">cId_pe_k_o</span>.
+      </p>
+    </section>
+
+    <section id="nse" class="panel">
+      <h1>NSE – Coming soon</h1>
+    </section>
+
+    <section id="bse" class="panel">
+      <h1>BSE – Coming soon</h1>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Local-only: files stay in your browser.</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
