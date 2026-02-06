@@ -514,7 +514,7 @@ function addPosRow(prefill = {}) {
 
     const mult = lotMultiplier(sym);
     if (span && span.ra && span.ra.length && lots !== 0) {
-      impactTd.textContent = (span.worst * Math.abs(lots) * mult).toFixed(2);
+      impactTd.textContent = (span.worst * Math.abs(lots)).toFixed(2);
     } else {
       impactTd.textContent = "—";
     }
@@ -663,7 +663,7 @@ calcBtn.addEventListener("click", () => {
 
     const local = new Array(L).fill(0);
     for (let i = 0; i < L; i++) {
-      const v = (span.ra[i] ?? 0) * p.lots * mult;
+      const v = (span.ra[i] ?? 0) * p.lots;
       portfolio[i] += v;
       local[i] = v;
     }
