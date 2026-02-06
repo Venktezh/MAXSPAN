@@ -1,4 +1,4 @@
-// MAXSPAN app.js — SPAN + Bhav + Positions + Spread grouping + Bhav-derived lot multipliers (client-side)
+// MAXSPAN app.js — SPAN + Bhav + Positions + Spread grouping + Bhav-derived lot multipliers (client-side only)
 
 const el = (id) => document.getElementById(id);
 
@@ -61,28 +61,12 @@ function parseXml(xmlText) {
   return doc;
 }
 
-// ---------- Date/month helpers ----------
-const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-
-function monthKeyFromBhavExpiry(expiryStr) {
-  const s = String(expiryStr || "").toUpperCase().replace(/\s+/g,"");
-  const mmm = MONTHS.find(m => s.includes(m));
-  const yyyy = (s.match(/20\d{2}/) || [null])[0];
-  if (!mmm || !yyyy) return null;
-  return `${mmm}-${yyyy}`;
-}
-
-function monthKeyFromSpanPe(peStr) {
-  const s = String(peStr || "").trim();
-  if (!/^\d{8}$/.test(s)) return null;
-  const yyyy = s.slice(0,4);
-  const mm = Number(s.slice(4,6));
-  if (!(mm >= 1 && mm <= 12)) return null;
-  return `${MONTHS[mm-1]}-${yyyy}`;
-}
-
+// ---------- Basic helpers ----------
 function num(v) {
-  const x = Number(String(v ?? "").replace(/,/g,"").trim());
+  // Works for: "13700.000 KGS" -> 13700, also removes commas.
+  const s = String(v ?? "").replace(/,/g, "").trim();
+  const m = s.match(/^-?\d+(\.\d+)?/);
+  const x = m ? Number(m[0]) : Number(s);
   return Number.isFinite(x) ? x : null;
 }
 
@@ -90,41 +74,42 @@ function normalizeSym(s) {
   return String(s || "").toUpperCase().replace(/\s+/g, "");
 }
 
-// ---------- Lot multiplier handling ----------
-let LOT_MULTIPLIER = new Map();       // from CSV
-let BHAV_LOT_MULTIPLIER = new Map();  // derived from bhav volQty/volLots
+function median(arr) {
+  const a = arr.slice().filter(Number.isFinite).sort((x, y) => x - y);
+  const n = a.length;
+  if (!n) return null;
+  const mid = Math.floor(n / 2);
+  return n % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+// ---------- Date/month helpers ----------
+const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+
+function monthKeyFromBhavExpiry(expiryStr) {
+  // Eg "27FEB2026" or "31MAR2026"
+  const s = String(expiryStr || "").toUpperCase().replace(/\s+/g, "");
+  const mmm = MONTHS.find(m => s.includes(m));
+  const yyyy = (s.match(/20\d{2}/) || [null])[0];
+  if (!mmm || !yyyy) return null;
+  return `${mmm}-${yyyy}`;
+}
+
+function monthKeyFromSpanPe(peStr) {
+  // pe is YYYYMMDD
+  const s = String(peStr || "").trim();
+  if (!/^\d{8}$/.test(s)) return null;
+  const yyyy = s.slice(0, 4);
+  const mm = Number(s.slice(4, 6));
+  if (!(mm >= 1 && mm <= 12)) return null;
+  return `${MONTHS[mm - 1]}-${yyyy}`;
+}
+
+// ---------- Lot multipliers (Bhav-only) ----------
+let BHAV_LOT_MULTIPLIER = new Map(); // symbol -> multiplier (median volQty/volLots)
 
 function lotMultiplier(symbol) {
   const s = normalizeSym(symbol);
-  // 1) bhav-derived (best)
-  if (BHAV_LOT_MULTIPLIER.has(s)) return BHAV_LOT_MULTIPLIER.get(s);
-  // 2) CSV fallback
-  if (LOT_MULTIPLIER.has(s)) return LOT_MULTIPLIER.get(s);
-  // 3) default
-  return 1;
-}
-
-function parseLotMultiplierCSV(csvText) {
-  LOT_MULTIPLIER.clear();
-
-  const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  if (lines.length < 2) return;
-
-  const header = lines[0].toLowerCase();
-  if (!header.includes("symbol") || !(header.includes("lot_multiplier") || header.includes("lot"))) {
-    throw new Error("lot_multiplier.csv must have headers: symbol, lot_multiplier");
-  }
-
-  for (let i = 1; i < lines.length; i++) {
-    const parts = lines[i].split(",").map(x => x.trim());
-    if (parts.length < 2) continue;
-    const sym = parts[0];
-    const mult = parts[1];
-    if (!sym || !mult) continue;
-    const m = Number(mult);
-    if (!Number.isFinite(m) || m <= 0) continue;
-    LOT_MULTIPLIER.set(normalizeSym(sym), m);
-  }
+  return BHAV_LOT_MULTIPLIER.get(s) ?? 1;
 }
 
 // ---------- Parse Bhav (HTML-table .xls) ----------
@@ -146,6 +131,8 @@ function parseBhavHtmlTable(htmlText) {
   const iClose  = idx("Close");
   const iOI     = idx("Open Interest(Lots)");
   const iInstr  = idx("Instrument Name");
+
+  // For lot multiplier derivation:
   const iVolLots = idx("Volume(Lots)");
   const iVolQty  = idx("Volume(In 000's)");
 
@@ -167,18 +154,17 @@ function parseBhavHtmlTable(htmlText) {
     const oi = (iOI >= 0 ? num(cells[iOI]) : null);
     const instr = (iInstr >= 0 ? (cells[iInstr] || "") : "");
 
-    // For lot multiplier derivation
     const volLots = (iVolLots >= 0 ? num(cells[iVolLots]) : null);
     const volQtyRaw = (iVolQty >= 0 ? (cells[iVolQty] || "") : "");
-    // volQtyRaw is like "4245.000 KGS" or "0.000 KGS"
-    const volQty = num(volQtyRaw); // numeric prefix
+    const volQty = num(volQtyRaw);
 
     if (!symbol || !monthKey) continue;
 
     const type = (optType && optType !== "-" ? "OPT" : "FUT");
 
     out.push({
-      symbol, monthKey, type, strike, close, oi, instr, expiryRaw, optType,
+      symbol, monthKey, type, strike,
+      close, oi, instr, expiryRaw, optType,
       volLots, volQty
     });
   }
@@ -221,6 +207,7 @@ function worstAbs(arr) {
 }
 
 function buildPfIdToCode(spanDoc) {
+  // pfId -> pfCode (symbol)
   const map = new Map();
 
   const allPf = [
@@ -237,12 +224,11 @@ function buildPfIdToCode(spanDoc) {
   return map;
 }
 
-// Extract ALL futures/options from the whole SPAN file
 function extractSpanContracts(spanDoc) {
   const pfIdToCode = buildPfIdToCode(spanDoc);
   const rows = [];
 
-  // FUT
+  // --- FUT: take ALL <fut> nodes ---
   const futNodes = Array.from(spanDoc.getElementsByTagName("fut"));
   for (const fut of futNodes) {
     const pe = textOf(fut, "pe");
@@ -254,11 +240,10 @@ function extractSpanContracts(spanDoc) {
     const undC = fut.getElementsByTagName("undC")[0];
     const undPfId = undC ? textOf(undC, "pfId") : "";
     const symbol = pfIdToCode.get(String(undPfId).trim()) || "";
+    if (!symbol) continue;
 
     const scanRate = fut.getElementsByTagName("scanRate")[0];
     const priceScan = scanRate ? (num(textOf(scanRate, "priceScan")) ?? null) : null;
-
-    if (!symbol) continue;
 
     rows.push({
       symbol,
@@ -273,7 +258,7 @@ function extractSpanContracts(spanDoc) {
     });
   }
 
-  // OPT
+  // --- OPT: take ALL <opt> nodes ---
   const optNodes = Array.from(spanDoc.getElementsByTagName("opt"));
   for (const opt of optNodes) {
     const pe = textOf(opt, "pe");
@@ -283,16 +268,15 @@ function extractSpanContracts(spanDoc) {
     if (!ra) continue;
 
     const strike = num(textOf(opt, "k")) ?? 0;
-    const cp = (textOf(opt, "o") || "").toUpperCase(); // C/P
+    const cp = (textOf(opt, "o") || "").toUpperCase(); // C/P (if present)
 
     const undC = opt.getElementsByTagName("undC")[0];
     const undPfId = undC ? textOf(undC, "pfId") : "";
     const symbol = pfIdToCode.get(String(undPfId).trim()) || "";
+    if (!symbol) continue;
 
     const scanRate = opt.getElementsByTagName("scanRate")[0];
     const priceScan = scanRate ? (num(textOf(scanRate, "priceScan")) ?? null) : null;
-
-    if (!symbol) continue;
 
     rows.push({
       symbol,
@@ -317,7 +301,6 @@ function extractSpanContracts(spanDoc) {
     seen.add(key);
     out.push(r);
   }
-
   return out;
 }
 
@@ -634,10 +617,11 @@ function refreshSpreadGroups() {
     for (const leg of legs) {
       const key = `${leg.symbol}|${leg.month}|${leg.type}|${leg.type==="OPT" ? leg.strike.toFixed(2) : "0.00"}`;
       const span = spanRows.find(r => spanKey(r) === key) || null;
+
       const worst = span ? span.worst : null;
       const close = span?.close ?? null;
-
       const m = lotMultiplier(leg.symbol);
+
       const wtxt = worst == null ? "—" : (worst * Math.abs(leg.lots) * m).toFixed(2);
       const ctxt = close == null ? "—" : close.toFixed(2);
 
@@ -708,6 +692,7 @@ calcBtn.addEventListener("click", () => {
 // ---------- Load files ----------
 loadBtn.addEventListener("click", async () => {
   resetLog();
+
   bhavIndex.clear();
   spanRows = [];
   BHAV_LOT_MULTIPLIER.clear();
@@ -730,49 +715,44 @@ loadBtn.addEventListener("click", async () => {
   if (!bhavFile) { log("❌ Upload Bhav file."); return; }
 
   try {
-    // 0) Load lot multipliers CSV from repo (optional)
-    try {
-      const resp = await fetch("lot_multiplier.csv");
-      if (resp.ok) {
-        const csvText = await resp.text();
-        parseLotMultiplierCSV(csvText);
-        log(`Lot multiplier CSV loaded: ${LOT_MULTIPLIER.size}`);
-      } else {
-        log("⚠️ lot_multiplier.csv not found, CSV fallback disabled.");
-      }
-    } catch {
-      log("⚠️ Failed to fetch lot_multiplier.csv, CSV fallback disabled.");
-    }
-
-    // 1) Parse SPAN
+    // 1) SPAN
     log(`Reading SPAN: ${spanFile.name}`);
     const spanText = await readFileAsText(spanFile);
     const spanDoc = parseXml(spanText);
     const baseRows = extractSpanContracts(spanDoc);
     log(`SPAN contracts with ra: ${baseRows.length}`);
 
-    // 2) Parse Bhav
+    // 2) Bhav
     log(`Reading Bhav: ${bhavFile.name}`);
     const bhavText = await readFileAsText(bhavFile);
     const bhavRows = parseBhavHtmlTable(bhavText);
     log(`Bhav rows parsed: ${bhavRows.length}`);
 
-    // 3) Build bhav index + derive lot multipliers from volume columns
+    // 3) Index bhav for close/oi lookup
     for (const r of bhavRows) bhavIndex.set(bhavKey(r), r);
 
+    // 4) Derive lot multipliers from bhav: median(volQty/volLots) per symbol
+    const bucket = new Map(); // symbol -> [m...]
     for (const r of bhavRows) {
       if (!r.symbol) continue;
       if (!r.volLots || !r.volQty) continue;
       if (r.volLots <= 0 || r.volQty <= 0) continue;
-      const mult = r.volQty / r.volLots;
-      if (!Number.isFinite(mult) || mult <= 0) continue;
-      if (!BHAV_LOT_MULTIPLIER.has(r.symbol)) {
-        BHAV_LOT_MULTIPLIER.set(r.symbol, mult);
-      }
+
+      const m = r.volQty / r.volLots;
+      if (!Number.isFinite(m) || m <= 0) continue;
+
+      if (!bucket.has(r.symbol)) bucket.set(r.symbol, []);
+      bucket.get(r.symbol).push(m);
     }
+
+    for (const [sym, arr] of bucket.entries()) {
+      const m = median(arr);
+      if (m != null) BHAV_LOT_MULTIPLIER.set(sym, m);
+    }
+
     log(`Bhav lot multipliers derived: ${BHAV_LOT_MULTIPLIER.size}`);
 
-    // 4) Enrich SPAN rows with bhav close/oi
+    // 5) Enrich SPAN with bhav close/oi
     spanRows = baseRows.map(r => {
       const b = bhavIndex.get(spanKey(r)) || null;
       return { ...r, close: b?.close ?? null, oi: b?.oi ?? null };
