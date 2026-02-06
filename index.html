@@ -1,18 +1,17 @@
-<!-- deploy -->
-
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>SPAN Tool (NSE / BSE / MCX)</title>
+  <title>MAXSPAN — MCX SPAN + Bhav + Positions</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
   <header class="header">
     <div class="brand">
-      <div class="brand__title">SPAN Tool</div>
-      <div class="brand__sub">NSE · BSE · MCX (starting with MCX)</div>
+      <div class="brand__title">MAXSPAN</div>
+      <div class="brand__sub">Readable SPAN + Bhav · Positions (Kite-style)</div>
     </div>
   </header>
 
@@ -23,151 +22,160 @@
       <button class="tab" data-tab="bse" disabled title="Coming soon">BSE</button>
     </nav>
 
-    <div class="card">
-  <div class="grid2">
-    <div>
-      <label class="label">SPAN file (.spn / .xml) — Current or MAX</label>
-      <input id="spanFile" type="file" accept=".spn,.xml,application/xml,text/xml" />
-      <div class="hint" id="spanHint">No file selected</div>
-    </div>
+    <!-- MCX PANEL -->
+    <section id="mcx" class="panel is-active">
+      <h1>MCX — SPAN + Bhav + Positions</h1>
 
-    <div>
-      <label class="label">Bhav copy (.xls / .html table export)</label>
-      <input id="bhavFile" type="file" accept=".xls,.html,.htm,text/html,application/vnd.ms-excel" />
-      <div class="hint" id="bhavHint">No file selected</div>
-    </div>
-  </div>
+      <div class="card">
+        <!-- FILE INPUTS -->
+        <div class="grid2">
+          <div>
+            <label class="label">SPAN file (.spn / .xml) — Current / BOD / MAX</label>
+            <input id="spanFile" type="file" accept=".spn,.xml,application/xml,text/xml" />
+            <div class="hint" id="spanHint">No file selected</div>
+          </div>
 
-  <div class="row">
-    <div>
-      <label class="label">View</label>
-      <select id="viewMode">
-        <option value="contracts" selected>Readable SPAN (Contracts)</option>
-        <option value="portfolio">Positions & Portfolio Risk</option>
-      </select>
-    </div>
+          <div>
+            <label class="label">Bhav copy (.xls / .html table export)</label>
+            <input id="bhavFile" type="file" accept=".xls,.html,.htm,text/html,application/vnd.ms-excel" />
+            <div class="hint" id="bhavHint">No file selected</div>
+          </div>
+        </div>
 
-    <div class="actions">
-      <button id="loadBtn" class="btn btn-primary">Load files</button>
-      <button id="exportContractsBtn" class="btn" disabled>Export contracts CSV</button>
-    </div>
-  </div>
+        <div class="row">
+          <div>
+            <label class="label">View</label>
+            <select id="viewMode">
+              <option value="contracts" selected>Readable SPAN (Contracts)</option>
+              <option value="portfolio">Positions & Portfolio Risk</option>
+            </select>
+          </div>
 
-  <hr />
+          <div class="actions">
+            <button id="loadBtn" class="btn btn-primary">Load files</button>
+            <button id="exportContractsBtn" class="btn" disabled>Export contracts CSV</button>
+          </div>
+        </div>
 
-  <!-- CONTRACTS VIEW -->
-  <div id="contractsView" class="view is-active">
-    <div class="row" style="margin-top:0">
-      <div style="flex:1">
-        <label class="label">Search</label>
-        <input id="search" type="text" placeholder="ALUMINI / GOLD / expiry / FUT / OPT..." />
+        <hr />
+
+        <!-- CONTRACTS VIEW -->
+        <div id="contractsView" class="view is-active">
+          <div class="row" style="margin-top:0">
+            <div style="flex:1">
+              <label class="label">Search</label>
+              <input id="search" type="text" placeholder="ALUMINI / GOLD / expiry / FUT / OPT..." />
+            </div>
+            <div>
+              <label class="label">Filter Month</label>
+              <select id="monthFilter">
+                <option value="">All</option>
+              </select>
+            </div>
+            <div>
+              <label class="label">Type</label>
+              <select id="typeFilter">
+                <option value="">All</option>
+                <option value="FUT">FUT</option>
+                <option value="OPT">OPT</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="tableWrap">
+            <table class="table" id="contractsTable">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Month</th>
+                  <th>Type</th>
+                  <th>Strike</th>
+                  <th>Close</th>
+                  <th>OI</th>
+                  <th>Scan</th>
+                  <th>Worst(|ra|)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- PORTFOLIO VIEW -->
+        <div id="portfolioView" class="view">
+          <div class="row" style="margin-top:0">
+            <div class="actions" style="margin-left:0">
+              <button id="addRowBtn" class="btn btn-primary">Add position</button>
+              <button id="calcBtn" class="btn" disabled>Calculate portfolio</button>
+              <button id="exportPosBtn" class="btn" disabled>Export positions CSV</button>
+            </div>
+
+            <div style="margin-left:auto; min-width: 240px">
+              <label class="label">Portfolio worst scenario</label>
+              <div class="bigNumber" id="portfolioWorst">—</div>
+            </div>
+          </div>
+
+          <div class="tableWrap">
+            <table class="table" id="posTable">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Month</th>
+                  <th>Type</th>
+                  <th>Strike</th>
+                  <th>Lots (+ long / - short)</th>
+                  <th>Close</th>
+                  <th>OI</th>
+                  <th>Worst(|ra|) × lots</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <div class="grid2" style="margin-top:12px">
+            <div class="logWrap">
+              <div class="label">Portfolio scenario vector (first 20)</div>
+              <pre id="scenarioLog" class="log"></pre>
+            </div>
+
+            <div class="logWrap">
+              <div class="label">Top contributors (by abs impact)</div>
+              <pre id="contributorsLog" class="log"></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- LOG -->
+        <div class="logWrap">
+          <div class="label">Log</div>
+          <pre id="log" class="log" aria-live="polite"></pre>
+        </div>
       </div>
-      <div>
-        <label class="label">Filter Month</label>
-        <select id="monthFilter">
-          <option value="">All</option>
-        </select>
-      </div>
-      <div>
-        <label class="label">Type</label>
-        <select id="typeFilter">
-          <option value="">All</option>
-          <option value="FUT">FUT</option>
-          <option value="OPT">OPT</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="tableWrap">
-      <table class="table" id="contractsTable">
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Month</th>
-            <th>Type</th>
-            <th>Strike</th>
-            <th>Close</th>
-            <th>OI</th>
-            <th>Scan</th>
-            <th>Worst(|ra|)</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- PORTFOLIO VIEW -->
-  <div id="portfolioView" class="view">
-    <div class="row" style="margin-top:0">
-      <div class="actions" style="margin-left:0">
-        <button id="addRowBtn" class="btn btn-primary">Add position</button>
-        <button id="calcBtn" class="btn" disabled>Calculate portfolio</button>
-        <button id="exportPosBtn" class="btn" disabled>Export positions CSV</button>
-      </div>
-      <div style="margin-left:auto; min-width: 220px">
-        <label class="label">Portfolio worst scenario</label>
-        <div class="bigNumber" id="portfolioWorst">—</div>
-      </div>
-    </div>
-
-    <div class="tableWrap">
-      <table class="table" id="posTable">
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Month</th>
-            <th>Type</th>
-            <th>Strike</th>
-            <th>Lots (+ long / - short)</th>
-            <th>Close</th>
-            <th>OI</th>
-            <th>Worst(|ra|) × lots</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <div class="grid2" style="margin-top:12px">
-      <div class="logWrap">
-        <div class="label">Portfolio scenario vector (first 20)</div>
-        <pre id="scenarioLog" class="log"></pre>
-      </div>
-
-      <div class="logWrap">
-        <div class="label">Top contributors (by abs impact)</div>
-        <pre id="contributorsLog" class="log"></pre>
-      </div>
-    </div>
-  </div>
-
-  <div class="logWrap">
-    <div class="label">Log</div>
-    <pre id="log" class="log" aria-live="polite"></pre>
-  </div>
-</div>
 
       <p class="note">
-        This tool reads your SPAN XML and applies scenario-wise MAX across &lt;ra&gt; arrays using the key:
-        <span class="mono">cId_pe_k_o</span>.
+        Tip: If intraday SPAN isn’t available, you can still compute a BOD-based estimate using BOD SPAN + positions.
+        Bhav is used for readability (Close/OI), not for SPAN scenario math.
       </p>
     </section>
 
+    <!-- PLACEHOLDER PANELS -->
     <section id="nse" class="panel">
-      <h1>NSE – Coming soon</h1>
+      <h1>NSE — Coming soon</h1>
     </section>
 
     <section id="bse" class="panel">
-      <h1>BSE – Coming soon</h1>
+      <h1>BSE — Coming soon</h1>
     </section>
   </main>
 
   <footer class="footer">
-    <span>Local-only: files stay in your browser.</span>
+    <span>Runs fully in your browser — files are not uploaded anywhere.</span>
   </footer>
 
+  <!-- IMPORTANT: app.js must be separate. DO NOT paste JS into index.html -->
   <script src="app.js"></script>
 </body>
 </html>
