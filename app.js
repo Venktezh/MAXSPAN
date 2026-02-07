@@ -719,7 +719,7 @@ calcBtn.addEventListener("click", () => {
       for (const tn of g.tns) rate = Math.max(rate, info.spreadRateByTn.get(tn) ?? 0);
       if (rate === 0) for (const r of info.spreadRateByTn.values()) rate = Math.max(rate, r);
     }
-    spreadCharge += rate * spreadLots * lotMult(sym);
+    spreadCharge += rate * spreadLots; // rate is already contract-level in SPAN; do NOT multiply by lotMult
   }
 
   const total = residual + spreadCharge;
