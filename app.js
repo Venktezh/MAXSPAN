@@ -1,8 +1,5 @@
-// MAXSPAN app.js — SPAN + Bhav + Positions + Spread grouping + Bhav-derived lot multiplier (per symbol)
-// Uses Bhav columns: Volume(Lots) and Volume(In 000's). Multiplier computed once per symbol as median(qty/lots).
-// Unit-aware: GRMS is treated as-is; other units assume the numeric is "in 000's" => *1000.
-//
-// If your bhav has different unit conventions, tweak qtyFromBhavVolRaw() below.
+// MAXSPAN app.js — SPAN + Bhav + Positions + Spread grouping + Bhav-derived lot multiplier (adaptive, per symbol)
+// Fixes lotMult=0 by choosing best scaling (base vs base*1000) per symbol based on “integer-likeness”.
 
 const el = (id) => document.getElementById(id);
 
@@ -11,9 +8,7 @@ function log(line) {
   logEl.textContent += line + "\n";
   logEl.scrollTop = logEl.scrollHeight;
 }
-function resetLog() {
-  logEl.textContent = "";
-}
+function resetLog() { logEl.textContent = ""; }
 
 // Inputs
 const spanFileEl = el("spanFile");
@@ -85,7 +80,7 @@ function monthKeyFromSpanPe(peStr) {
   return `${MONTHS[mm-1]}-${yyyy}`;
 }
 
-// number parser that handles "177300.000 GRMS"
+// Robust number parser: handles "177.300 GRMS", "177300.000 GRMS", commas, etc.
 function num(v) {
   const s = String(v ?? "").replace(/,/g,"").trim();
   const m = s.match(/^-?\d+(\.\d+)?/);
@@ -97,8 +92,8 @@ function normalizeSym(s) {
   return String(s || "").toUpperCase().replace(/\s+/g, "");
 }
 
-// ---------- Lot multipliers (derived from bhav, once per symbol) ----------
-let LOT_MULT = new Map(); // symbol -> multiplier
+// ---------- Lot multipliers (derived from bhav, once per symbol, adaptive scaling) ----------
+let LOT_MULT = new Map(); // symbol -> multiplier integer (>=1)
 
 function median(arr) {
   const a = arr.slice().filter(Number.isFinite).sort((x,y)=>x-y);
@@ -108,25 +103,44 @@ function median(arr) {
   return n % 2 ? a[mid] : (a[mid-1] + a[mid]) / 2;
 }
 
-// Convert bhav "Volume(In 000's)" cell into quantity.
-// Unit-aware:
-// - GRMS: treat numeric as grams (no *1000) because many MCX bhavs already show full grams.
-// - KGS/MT/others: treat numeric as "in thousands" => *1000
-function qtyFromBhavVolRaw(volQtyRaw) {
-  const raw = String(volQtyRaw || "").trim().toUpperCase();
-  const base = num(raw);
-  if (base == null) return null;
+function integerScore(x) {
+  // lower is better
+  if (!Number.isFinite(x) || x <= 0) return Infinity;
+  const r = Math.round(x);
+  const frac = Math.abs(x - r) / Math.max(1, Math.abs(x)); // relative distance from integer
+  let penalty = 0;
 
-  // Extract unit token (last word)
-  const parts = raw.split(/\s+/).filter(Boolean);
-  const unit = parts.length ? parts[parts.length - 1] : "";
+  // reject unrealistic tiny values (cause rounding to 0)
+  if (x < 1) penalty += 10;
 
-  // Adjust here if your bhav uses different convention
-  if (unit === "GRMS" || unit === "GRAMS") {
-    return base; // not *1000
-  }
-  // Default assumption for "In 000's"
-  return base * 1000;
+  // avoid absurdly huge multipliers (can happen if scaling wrong)
+  if (x > 1_000_000) penalty += 10;
+
+  return frac + penalty;
+}
+
+function chooseBestMultiplier(sym, candidatesA, candidatesB) {
+  // A = base/lots, B = (base*1000)/lots
+  const mA = median(candidatesA);
+  const mB = median(candidatesB);
+
+  const sA = integerScore(mA);
+  const sB = integerScore(mB);
+
+  let chosen = null;
+
+  if (sA < sB) chosen = mA;
+  else chosen = mB;
+
+  if (!Number.isFinite(chosen) || chosen <= 0) return 1;
+
+  // Prefer a clean integer multiplier
+  let rounded = Math.round(chosen);
+
+  // Never allow 0
+  if (rounded < 1) rounded = 1;
+
+  return rounded;
 }
 
 function lotMult(symbol) {
@@ -165,8 +179,7 @@ function parseBhavHtmlTable(htmlText) {
     const cells = Array.from(rows[r].querySelectorAll("td")).map(td => td.textContent.trim());
     if (!cells.length) continue;
 
-    const symbolRaw = cells[iSymbol] || "";
-    const symbol = normalizeSym(symbolRaw);
+    const symbol = normalizeSym(cells[iSymbol] || "");
     const expiryRaw = cells[iExpiry] || "";
     const monthKey = monthKeyFromBhavExpiry(expiryRaw);
 
@@ -229,13 +242,11 @@ function worstAbs(arr) {
 
 function buildPfIdToCode(spanDoc) {
   const map = new Map();
-
   const allPf = [
     ...Array.from(spanDoc.getElementsByTagName("phyPf")),
     ...Array.from(spanDoc.getElementsByTagName("futPf")),
     ...Array.from(spanDoc.getElementsByTagName("optPf")),
   ];
-
   for (const pf of allPf) {
     const pfId = textOf(pf, "pfId");
     const pfCode = textOf(pf, "pfCode");
@@ -249,12 +260,11 @@ function extractSpanContracts(spanDoc) {
   const pfIdToCode = buildPfIdToCode(spanDoc);
   const rows = [];
 
-  // --- FUT ---
+  // FUT
   const futNodes = Array.from(spanDoc.getElementsByTagName("fut"));
   for (const fut of futNodes) {
     const pe = textOf(fut, "pe");
     const monthKey = monthKeyFromSpanPe(pe) || "UNK";
-
     const ra = raArray(fut);
     if (!ra) continue;
 
@@ -267,30 +277,19 @@ function extractSpanContracts(spanDoc) {
 
     if (!symbol) continue;
 
-    rows.push({
-      symbol,
-      monthKey,
-      type: "FUT",
-      strike: 0,
-      optCp: "",
-      pe,
-      priceScan,
-      ra,
-      worst: worstAbs(ra),
-    });
+    rows.push({ symbol, monthKey, type:"FUT", strike:0, optCp:"", pe, priceScan, ra, worst: worstAbs(ra) });
   }
 
-  // --- OPT ---
+  // OPT
   const optNodes = Array.from(spanDoc.getElementsByTagName("opt"));
   for (const opt of optNodes) {
     const pe = textOf(opt, "pe");
     const monthKey = monthKeyFromSpanPe(pe) || "UNK";
-
     const ra = raArray(opt);
     if (!ra) continue;
 
     const strike = num(textOf(opt, "k")) ?? 0;
-    const cp = (textOf(opt, "o") || "").toUpperCase(); // C/P
+    const cp = (textOf(opt, "o") || "").toUpperCase();
 
     const undC = opt.getElementsByTagName("undC")[0];
     const undPfId = undC ? textOf(undC, "pfId") : "";
@@ -301,20 +300,10 @@ function extractSpanContracts(spanDoc) {
 
     if (!symbol) continue;
 
-    rows.push({
-      symbol,
-      monthKey,
-      type: "OPT",
-      strike,
-      optCp: cp,
-      pe,
-      priceScan,
-      ra,
-      worst: worstAbs(ra),
-    });
+    rows.push({ symbol, monthKey, type:"OPT", strike, optCp:cp, pe, priceScan, ra, worst: worstAbs(ra) });
   }
 
-  // Deduplicate (sometimes appears twice)
+  // Dedup
   const seen = new Set();
   const out = [];
   for (const r of rows) {
@@ -324,7 +313,6 @@ function extractSpanContracts(spanDoc) {
     seen.add(key);
     out.push(r);
   }
-
   return out;
 }
 
@@ -351,15 +339,10 @@ function setView(view) {
 }
 
 viewModeEl.addEventListener("change", () => setView(viewModeEl.value));
+spanFileEl.addEventListener("change", () => { spanHint.textContent = spanFileEl.files?.[0]?.name || "No file selected"; });
+bhavFileEl.addEventListener("change", () => { bhavHint.textContent = bhavFileEl.files?.[0]?.name || "No file selected"; });
 
-spanFileEl.addEventListener("change", () => {
-  spanHint.textContent = spanFileEl.files?.[0]?.name || "No file selected";
-});
-bhavFileEl.addEventListener("change", () => {
-  bhavHint.textContent = bhavFileEl.files?.[0]?.name || "No file selected";
-});
-
-// Tabs (MCX only active)
+// Tabs
 document.querySelectorAll(".tab").forEach(btn => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
@@ -479,12 +462,7 @@ function makeSelect(options, value="") {
   }
   return s;
 }
-
-function tdWrap(node) {
-  const td = document.createElement("td");
-  td.appendChild(node);
-  return td;
-}
+function tdWrap(node) { const td = document.createElement("td"); td.appendChild(node); return td; }
 
 function addPosRow(prefill = {}) {
   const tr = document.createElement("tr");
@@ -500,13 +478,11 @@ function addPosRow(prefill = {}) {
   strikeInput.type = "number";
   strikeInput.step = "0.01";
   strikeInput.value = prefill.strike ?? 0;
-  strikeInput.placeholder = "0";
 
   const lotsInput = document.createElement("input");
   lotsInput.type = "number";
   lotsInput.step = "1";
   lotsInput.value = prefill.lots ?? 0;
-  lotsInput.placeholder = "+ long / - short";
 
   const closeTd = document.createElement("td"); closeTd.className = "mono"; closeTd.textContent="—";
   const oiTd = document.createElement("td"); oiTd.className = "mono"; oiTd.textContent="—";
@@ -515,10 +491,7 @@ function addPosRow(prefill = {}) {
   const delBtn = document.createElement("button");
   delBtn.className = "btn";
   delBtn.textContent = "Remove";
-  delBtn.addEventListener("click", () => {
-    tr.remove();
-    refreshSpreadGroups();
-  });
+  delBtn.addEventListener("click", () => { tr.remove(); refreshSpreadGroups(); });
 
   function recomputeRow() {
     const sym = symSel.value;
@@ -536,8 +509,10 @@ function addPosRow(prefill = {}) {
     closeTd.textContent = close == null ? "—" : close.toFixed(2);
     oiTd.textContent = oi == null ? "—" : String(oi);
 
+    const mult = lotMult(sym);
+
     if (span && span.ra && span.ra.length && lots !== 0) {
-      impactTd.textContent = (span.worst * Math.abs(lots) * lotMult(sym)).toFixed(2);
+      impactTd.textContent = (span.worst * Math.abs(lots) * mult).toFixed(2);
     } else {
       impactTd.textContent = "—";
     }
@@ -570,28 +545,12 @@ function addPosRow(prefill = {}) {
 
 addRowBtn.addEventListener("click", () => addPosRow());
 
-exportPosBtn.addEventListener("click", () => {
-  const rows = [];
-  for (const tr of Array.from(posTableBody.querySelectorAll("tr"))) {
-    const tds = tr.querySelectorAll("td");
-    const symbol = tds[0].querySelector("select")?.value || "";
-    const month = tds[1].querySelector("select")?.value || "";
-    const type = tds[2].querySelector("select")?.value || "";
-    const strike = tds[3].querySelector("input")?.value || "0";
-    const lots = tds[4].querySelector("input")?.value || "0";
-    rows.push({symbol, month, type, strike, lots});
-  }
-  const csv = toCsv(rows, ["symbol","month","type","strike","lots"]);
-  downloadText("positions.csv", csv, "text/csv");
-});
-
 // ---------- Spread grouping ----------
 function groupKeyForPos(p) {
   if (p.type === "FUT") return `${p.symbol}|FUT`;
   const st = Number(p.strike || 0).toFixed(2);
   return `${p.symbol}|OPT|${st}`;
 }
-
 function groupLabel(key) {
   const parts = key.split("|");
   if (parts[1] === "FUT") return `${parts[0]} FUT`;
@@ -616,14 +575,12 @@ function readPositionsFromTable() {
 function refreshSpreadGroups() {
   if (!spreadsLogEl) return;
   spreadsLogEl.textContent = "";
-
   if (!groupToggleEl?.checked) return;
 
   const positions = readPositionsFromTable();
   if (positions.length === 0) return;
 
   const groups = new Map();
-
   for (const p of positions) {
     const gk = groupKeyForPos(p);
     if (!groups.has(gk)) groups.set(gk, []);
@@ -633,10 +590,10 @@ function refreshSpreadGroups() {
   const lines = [];
   for (const [gk, legs] of groups.entries()) {
     const netLots = legs.reduce((s, x) => s + x.lots, 0);
-    lines.push(`${groupLabel(gk)}  | legs=${legs.length} | netLots=${netLots} | lotMult=${lotMult(legs[0].symbol)}`);
+    const mult = lotMult(legs[0].symbol);
+    lines.push(`${groupLabel(gk)}  | legs=${legs.length} | netLots=${netLots} | lotMult=${mult}`);
 
     legs.sort((a,b) => String(a.month).localeCompare(String(b.month)));
-
     for (const leg of legs) {
       const key = `${leg.symbol}|${leg.month}|${leg.type}|${leg.type==="OPT" ? leg.strike.toFixed(2) : "0.00"}`;
       const span = spanRows.find(r => spanKey(r) === key) || null;
@@ -648,13 +605,11 @@ function refreshSpreadGroups() {
 
       lines.push(`  - ${leg.month} | lots=${leg.lots} | close=${ctxt} | absImpact≈${wtxt}`);
     }
-
     lines.push("");
   }
 
   spreadsLogEl.textContent = lines.join("\n");
 }
-
 groupToggleEl?.addEventListener("change", refreshSpreadGroups);
 
 // ---------- Portfolio calc ----------
@@ -739,7 +694,6 @@ loadBtn.addEventListener("click", async () => {
     log(`Reading SPAN: ${spanFile.name}`);
     const spanText = await readFileAsText(spanFile);
     const spanDoc = parseXml(spanText);
-
     const baseRows = extractSpanContracts(spanDoc);
     log(`SPAN contracts with ra: ${baseRows.length}`);
 
@@ -751,29 +705,35 @@ loadBtn.addEventListener("click", async () => {
     // Index bhav for close/oi lookup
     for (const r of bhavRows) bhavIndex.set(bhavKey(r), r);
 
-    // Build multiplier once per symbol (median of qty/volLots)
-    const bucket = new Map(); // symbol -> [mult...]
+    // Build adaptive multiplier per symbol
+    const candA = new Map(); // sym -> [base/lots]
+    const candB = new Map(); // sym -> [(base*1000)/lots]
+
     for (const r of bhavRows) {
       if (!r.symbol) continue;
       if (!r.volLots || r.volLots <= 0) continue;
 
-      const qty = qtyFromBhavVolRaw(r.volQtyRaw);
-      if (!qty || qty <= 0) continue;
+      const base = num(r.volQtyRaw);
+      if (!base || base <= 0) continue;
 
-      const mult = qty / r.volLots;
-      if (!Number.isFinite(mult) || mult <= 0) continue;
+      const m1 = base / r.volLots;
+      const m2 = (base * 1000) / r.volLots;
 
-      if (!bucket.has(r.symbol)) bucket.set(r.symbol, []);
-      bucket.get(r.symbol).push(mult);
+      if (!candA.has(r.symbol)) candA.set(r.symbol, []);
+      if (!candB.has(r.symbol)) candB.set(r.symbol, []);
+      candA.get(r.symbol).push(m1);
+      candB.get(r.symbol).push(m2);
     }
 
-    for (const [sym, arr] of bucket.entries()) {
-      const m = median(arr);
-      if (m == null) continue;
-      LOT_MULT.set(sym, Math.round(m)); // try to get clean values like 10 / 100
+    for (const sym of new Set([...candA.keys(), ...candB.keys()])) {
+      const m = chooseBestMultiplier(sym, candA.get(sym) || [], candB.get(sym) || []);
+      LOT_MULT.set(sym, m);
     }
 
     log(`Lot multipliers derived: ${LOT_MULT.size}`);
+    // Quick debug: print some common ones if present
+    const dbg = ["GOLDM","GOLD","SILVERM","CRUDEOIL","NATGAS","ALUMINI"];
+    for (const s of dbg) if (LOT_MULT.has(s)) log(`  lotMult[${s}] = ${LOT_MULT.get(s)}`);
 
     // Enrich SPAN rows with close/oi from bhav
     spanRows = baseRows.map(r => {
@@ -783,7 +743,6 @@ loadBtn.addEventListener("click", async () => {
 
     buildMonthFilter(spanRows);
     buildSymbolList(spanRows);
-
     renderContracts();
     exportContractsBtn.disabled = spanRows.length === 0;
 
