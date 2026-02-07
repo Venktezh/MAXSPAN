@@ -1,4 +1,8 @@
-// MAXSPAN app.js — SPAN + Bhav + Positions + Spread grouping (client-side)
+// MAXSPAN app.js — MCX SPAN + Bhav + Positions + Hedging (calendar spread charge)
+// Client-side only. Files are read locally in your browser.
+//
+// IMPORTANT: Lot multipliers are HARD-CODED from lot_multiplier.csv.
+// If you add symbols later, extend LOT_MULTIPLIERS below.
 
 const el = (id) => document.getElementById(id);
 
@@ -7,9 +11,7 @@ function log(line) {
   logEl.textContent += line + "\n";
   logEl.scrollTop = logEl.scrollHeight;
 }
-function resetLog() {
-  logEl.textContent = "";
-}
+function resetLog() { logEl.textContent = ""; }
 
 // Inputs
 const spanFileEl = el("spanFile");
@@ -42,6 +44,47 @@ const contributorsLogEl = el("contributorsLog");
 // Spread grouping UI
 const groupToggleEl = el("groupToggle");
 const spreadsLogEl = el("spreadsLog");
+
+// ---------- Lot multipliers (HARDCODED) ----------
+const LOT_MULTIPLIERS = {
+  'ALUMINIUM': 5000,
+  'ALUMINI': 1000,
+  'CARDAMOM': 100,
+  'COPPER': 2500,
+  'CRUDEOIL': 100,
+  'CRUDEOILM': 10,
+  'ELECDMBL': 50,
+  'GOLD': 100,
+  'GOLDGUINEA': 1,
+  'GOLDM': 10,
+  'GOLDTEN': 1,
+  'GOLDPETAL': 1,
+  'LEAD': 5000,
+  'LEADMINI': 1000,
+  'MCXBULLDEX': 30,
+  'MENTHAOIL': 360,
+  'NICKEL': 250,
+  'NATURALGAS': 1250,
+  'NATGASMINI': 250,
+  'SILVER': 30,
+  'SILVERM': 5,
+  'SILVERMIC': 1,
+  'ZINC': 5000,
+  'ZINCMINI': 1000,
+  'ELECMBL': 50
+};
+
+function normalizeSym(s) {
+  return String(s || "").toUpperCase().replace(/\s+/g, "");
+}
+
+const LOT_MULT = new Map(Object.entries(LOT_MULTIPLIERS).map(([k,v]) => [normalizeSym(k), Number(v)]));
+
+function lotMult(symbol) {
+  const s = normalizeSym(symbol);
+  const m = LOT_MULT.get(s);
+  return (Number.isFinite(m) && m > 0) ? m : 1;
+}
 
 // ---------- File helpers ----------
 function readFileAsText(file) {
@@ -82,12 +125,10 @@ function monthKeyFromSpanPe(peStr) {
 }
 
 function num(v) {
-  const x = Number(String(v ?? "").replace(/,/g,"").trim());
+  const s = String(v ?? "").replace(/,/g,"").trim();
+  const m = s.match(/^-?\d+(\.\d+)?/);
+  const x = m ? Number(m[0]) : Number(s);
   return Number.isFinite(x) ? x : null;
-}
-
-function normalizeSym(s) {
-  return String(s || "").toUpperCase().replace(/\s+/g, "");
 }
 
 // ---------- Parse Bhav (HTML-table .xls) ----------
@@ -108,7 +149,6 @@ function parseBhavHtmlTable(htmlText) {
   const iStrike = idx("Strike Price");
   const iClose  = idx("Close");
   const iOI     = idx("Open Interest(Lots)");
-  const iInstr  = idx("Instrument Name");
 
   if (iSymbol < 0 || iExpiry < 0) throw new Error("Bhav: missing Symbol/Expiry Date columns.");
 
@@ -117,8 +157,7 @@ function parseBhavHtmlTable(htmlText) {
     const cells = Array.from(rows[r].querySelectorAll("td")).map(td => td.textContent.trim());
     if (!cells.length) continue;
 
-    const symbolRaw = cells[iSymbol] || "";
-    const symbol = normalizeSym(symbolRaw);
+    const symbol = normalizeSym(cells[iSymbol] || "");
     const expiryRaw = cells[iExpiry] || "";
     const monthKey = monthKeyFromBhavExpiry(expiryRaw);
 
@@ -128,13 +167,10 @@ function parseBhavHtmlTable(htmlText) {
     const close = (iClose >= 0 ? num(cells[iClose]) : null);
     const oi = (iOI >= 0 ? num(cells[iOI]) : null);
 
-    const instr = (iInstr >= 0 ? (cells[iInstr] || "") : "");
-
     if (!symbol || !monthKey) continue;
 
     const type = (optType && optType !== "-" ? "OPT" : "FUT");
-
-    out.push({ symbol, monthKey, type, strike, close, oi, instr, expiryRaw, optType });
+    out.push({ symbol, monthKey, type, strike, close, oi });
   }
 
   return out;
@@ -191,78 +227,123 @@ function buildPfIdToCode(spanDoc) {
   return map;
 }
 
-// Extract ALL futures/options from the whole SPAN file
-function extractSpanContracts(spanDoc) {
+function buildCcTierAndSpreadMaps(spanDoc) {
+  // cc -> { tiers: [{tn,sPe,ePe}], spreadRateByTn: Map(tn -> rate) }
+  const out = new Map();
+  const ccDefs = Array.from(spanDoc.getElementsByTagName("ccDef"));
+
+  const getTxt = (node, tag) => {
+    const n = node.getElementsByTagName(tag)[0];
+    return n ? (n.textContent || "").trim() : "";
+  };
+
+  for (const ccDef of ccDefs) {
+    const cc = normalizeSym(getTxt(ccDef, "cc"));
+    if (!cc) continue;
+
+    const tiers = [];
+    const intra = ccDef.getElementsByTagName("intraTiers")[0];
+    if (intra) {
+      const tnodes = Array.from(intra.getElementsByTagName("tier"));
+      for (const t of tnodes) {
+        const tn = Number(getTxt(t, "tn"));
+        const sPe = getTxt(t, "sPe");
+        const ePe = getTxt(t, "ePe");
+        if (Number.isFinite(tn)) tiers.push({ tn, sPe, ePe });
+      }
+    }
+    if (!tiers.length) tiers.push({ tn: 0, sPe: "", ePe: "" });
+
+    const spreadRateByTn = new Map();
+    const dSpreads = Array.from(ccDef.getElementsByTagName("dSpread"));
+    for (const ds of dSpreads) {
+      const legs = Array.from(ds.getElementsByTagName("tLeg"));
+      if (legs.length < 2) continue;
+
+      const legA = legs[0], legB = legs[1];
+
+      const ccA = normalizeSym(getTxt(legA, "cc"));
+      const ccB = normalizeSym(getTxt(legB, "cc"));
+      const tnA = Number(getTxt(legA, "tn"));
+      const tnB = Number(getTxt(legB, "tn"));
+      const rsA = getTxt(legA, "rs");
+      const rsB = getTxt(legB, "rs");
+
+      if (ccA !== cc || ccB !== cc) continue;
+      if (!Number.isFinite(tnA) || tnA !== tnB) continue;
+      if (!((rsA === "A" && rsB === "B") || (rsA === "B" && rsB === "A"))) continue;
+
+      const rateNode = ds.getElementsByTagName("rate")[0];
+      const val = rateNode ? num(getTxt(rateNode, "val")) : null;
+      if (val != null) spreadRateByTn.set(tnA, val);
+    }
+
+    out.set(cc, { tiers, spreadRateByTn });
+  }
+
+  return out;
+}
+
+function tierForExpiry(ccInfo, peYYYYMMDD) {
+  if (!ccInfo || !peYYYYMMDD) return 0;
+  for (const t of ccInfo.tiers) {
+    if (!t.sPe || !t.ePe) return t.tn;
+    if (peYYYYMMDD >= t.sPe && peYYYYMMDD <= t.ePe) return t.tn;
+  }
+  return 0;
+}
+
+// Extract futures/options and also attach tn (tier) from ccDef
+function extractSpanContracts(spanDoc, ccMaps) {
   const pfIdToCode = buildPfIdToCode(spanDoc);
   const rows = [];
 
-  // --- FUT ---
-  const futNodes = Array.from(spanDoc.getElementsByTagName("fut"));
-  for (const fut of futNodes) {
+  // FUT
+  for (const fut of Array.from(spanDoc.getElementsByTagName("fut"))) {
     const pe = textOf(fut, "pe");
     const monthKey = monthKeyFromSpanPe(pe) || "UNK";
-
     const ra = raArray(fut);
     if (!ra) continue;
 
-    // underlying pfId in <undC>
     const undC = fut.getElementsByTagName("undC")[0];
     const undPfId = undC ? textOf(undC, "pfId") : "";
     const symbol = pfIdToCode.get(String(undPfId).trim()) || "";
-
-    const scanRate = fut.getElementsByTagName("scanRate")[0];
-    const priceScan = scanRate ? (num(textOf(scanRate, "priceScan")) ?? null) : null;
-
     if (!symbol) continue;
 
+    const ccInfo = ccMaps.get(symbol);
+    const tn = tierForExpiry(ccInfo, pe);
+
     rows.push({
-      symbol,
-      monthKey,
-      type: "FUT",
-      strike: 0,
-      optCp: "",
-      pe,
-      priceScan,
-      ra,
-      worst: worstAbs(ra),
+      symbol, monthKey, type:"FUT", strike:0, optCp:"", pe, tn,
+      priceScan: null, ra, worst: worstAbs(ra),
     });
   }
 
-  // --- OPT ---
-  const optNodes = Array.from(spanDoc.getElementsByTagName("opt"));
-  for (const opt of optNodes) {
+  // OPT
+  for (const opt of Array.from(spanDoc.getElementsByTagName("opt"))) {
     const pe = textOf(opt, "pe");
     const monthKey = monthKeyFromSpanPe(pe) || "UNK";
-
     const ra = raArray(opt);
     if (!ra) continue;
 
     const strike = num(textOf(opt, "k")) ?? 0;
-    const cp = (textOf(opt, "o") || "").toUpperCase(); // C/P
+    const cp = (textOf(opt, "o") || "").toUpperCase();
 
     const undC = opt.getElementsByTagName("undC")[0];
     const undPfId = undC ? textOf(undC, "pfId") : "";
     const symbol = pfIdToCode.get(String(undPfId).trim()) || "";
-
-    const scanRate = opt.getElementsByTagName("scanRate")[0];
-    const priceScan = scanRate ? (num(textOf(scanRate, "priceScan")) ?? null) : null;
-
     if (!symbol) continue;
 
+    const ccInfo = ccMaps.get(symbol);
+    const tn = tierForExpiry(ccInfo, pe);
+
     rows.push({
-      symbol,
-      monthKey,
-      type: "OPT",
-      strike,
-      optCp: cp,
-      pe,
-      priceScan,
-      ra,
-      worst: worstAbs(ra),
+      symbol, monthKey, type:"OPT", strike, optCp:cp, pe, tn,
+      priceScan: null, ra, worst: worstAbs(ra),
     });
   }
 
-  // Deduplicate (sometimes appears twice)
+  // Dedup
   const seen = new Set();
   const out = [];
   for (const r of rows) {
@@ -272,7 +353,6 @@ function extractSpanContracts(spanDoc) {
     seen.add(key);
     out.push(r);
   }
-
   return out;
 }
 
@@ -286,6 +366,7 @@ let bhavIndex = new Map();  // key -> bhav row
 let spanRows = [];          // span rows enriched with close/oi
 let months = [];            // month filter
 let symbols = [];           // symbol list for positions dropdown
+let CCMAPS = new Map();     // cc tier + spread rates (for hedges)
 
 // ---------- UI toggles ----------
 function setView(view) {
@@ -307,7 +388,7 @@ bhavFileEl.addEventListener("change", () => {
   bhavHint.textContent = bhavFileEl.files?.[0]?.name || "No file selected";
 });
 
-// Tabs (MCX only active)
+// Tabs
 document.querySelectorAll(".tab").forEach(btn => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
@@ -349,6 +430,7 @@ function renderContracts() {
       r.type === "OPT" ? String(r.strike) : "",
       r.close != null ? String(r.close) : "",
       r.oi != null ? String(r.oi) : "",
+      r.tn != null ? String(r.tn) : "",
     ].join(" ").toLowerCase();
     return hay.includes(q);
   });
@@ -362,7 +444,6 @@ function renderContracts() {
       <td class="mono">${r.type === "OPT" ? r.strike.toFixed(2) : "-"}</td>
       <td class="mono">${r.close == null ? "—" : r.close.toFixed(2)}</td>
       <td class="mono">${r.oi == null ? "—" : String(r.oi)}</td>
-      <td class="mono">${r.priceScan == null ? "—" : r.priceScan.toFixed(6)}</td>
       <td class="mono">${r.worst.toFixed(2)}</td>
     `;
     contractsTableBody.appendChild(tr);
@@ -408,10 +489,10 @@ exportContractsBtn.addEventListener("click", () => {
     strike: r.type === "OPT" ? r.strike.toFixed(2) : "",
     close: r.close ?? "",
     oi: r.oi ?? "",
-    scan: r.priceScan ?? "",
+    tn: r.tn ?? "",
     worst_abs_ra: r.worst.toFixed(2),
   }));
-  const csv = toCsv(rows, ["symbol","month","type","strike","close","oi","scan","worst_abs_ra"]);
+  const csv = toCsv(rows, ["symbol","month","type","strike","close","oi","tn","worst_abs_ra"]);
   downloadText("contracts_readable.csv", csv, "text/csv");
 });
 
@@ -448,13 +529,11 @@ function addPosRow(prefill = {}) {
   strikeInput.type = "number";
   strikeInput.step = "0.01";
   strikeInput.value = prefill.strike ?? 0;
-  strikeInput.placeholder = "0";
 
   const lotsInput = document.createElement("input");
   lotsInput.type = "number";
   lotsInput.step = "1";
   lotsInput.value = prefill.lots ?? 0;
-  lotsInput.placeholder = "+ long / - short";
 
   const closeTd = document.createElement("td"); closeTd.className = "mono"; closeTd.textContent="—";
   const oiTd = document.createElement("td"); oiTd.className = "mono"; oiTd.textContent="—";
@@ -475,7 +554,6 @@ function addPosRow(prefill = {}) {
     const strike = num(strikeInput.value) ?? 0;
     const lots = num(lotsInput.value) ?? 0;
 
-    // Match to span row
     const key = `${sym}|${month}|${type}|${type==="OPT" ? strike.toFixed(2) : "0.00"}`;
     const span = spanRows.find(r => spanKey(r) === key) || null;
 
@@ -485,8 +563,10 @@ function addPosRow(prefill = {}) {
     closeTd.textContent = close == null ? "—" : close.toFixed(2);
     oiTd.textContent = oi == null ? "—" : String(oi);
 
+    const mult = lotMult(sym);
+
     if (span && span.ra && span.ra.length && lots !== 0) {
-      impactTd.textContent = (span.worst * Math.abs(lots)).toFixed(2);
+      impactTd.textContent = (span.worst * Math.abs(lots) * mult).toFixed(2);
     } else {
       impactTd.textContent = "—";
     }
@@ -519,26 +599,11 @@ function addPosRow(prefill = {}) {
 
 addRowBtn.addEventListener("click", () => addPosRow());
 
-exportPosBtn.addEventListener("click", () => {
-  const rows = [];
-  for (const tr of Array.from(posTableBody.querySelectorAll("tr"))) {
-    const tds = tr.querySelectorAll("td");
-    const symbol = tds[0].querySelector("select")?.value || "";
-    const month = tds[1].querySelector("select")?.value || "";
-    const type = tds[2].querySelector("select")?.value || "";
-    const strike = tds[3].querySelector("input")?.value || "0";
-    const lots = tds[4].querySelector("input")?.value || "0";
-    rows.push({symbol, month, type, strike, lots});
-  }
-  const csv = toCsv(rows, ["symbol","month","type","strike","lots"]);
-  downloadText("positions.csv", csv, "text/csv");
-});
-
 // ---------- Spread grouping ----------
 function groupKeyForPos(p) {
   if (p.type === "FUT") return `${p.symbol}|FUT`;
   const st = Number(p.strike || 0).toFixed(2);
-  return `${p.symbol}|OPT|${st}`; // (CP can be added later if needed)
+  return `${p.symbol}|OPT|${st}`;
 }
 
 function groupLabel(key) {
@@ -565,14 +630,12 @@ function readPositionsFromTable() {
 function refreshSpreadGroups() {
   if (!spreadsLogEl) return;
   spreadsLogEl.textContent = "";
-
   if (!groupToggleEl?.checked) return;
 
   const positions = readPositionsFromTable();
   if (positions.length === 0) return;
 
   const groups = new Map();
-
   for (const p of positions) {
     const gk = groupKeyForPos(p);
     if (!groups.has(gk)) groups.set(gk, []);
@@ -582,9 +645,9 @@ function refreshSpreadGroups() {
   const lines = [];
   for (const [gk, legs] of groups.entries()) {
     const netLots = legs.reduce((s, x) => s + x.lots, 0);
-    lines.push(`${groupLabel(gk)}  | legs=${legs.length} | netLots=${netLots}`);
+    const mult = lotMult(legs[0].symbol);
+    lines.push(`${groupLabel(gk)}  | legs=${legs.length} | netLots=${netLots} | lotMult=${mult}`);
 
-    // Sort legs by month label
     legs.sort((a,b) => String(a.month).localeCompare(String(b.month)));
 
     for (const leg of legs) {
@@ -593,21 +656,19 @@ function refreshSpreadGroups() {
       const worst = span ? span.worst : null;
       const close = span?.close ?? null;
 
-      const wtxt = worst == null ? "—" : (worst * Math.abs(leg.lots)).toFixed(2);
+      const wtxt = worst == null ? "—" : (worst * Math.abs(leg.lots) * lotMult(leg.symbol)).toFixed(2);
       const ctxt = close == null ? "—" : close.toFixed(2);
 
       lines.push(`  - ${leg.month} | lots=${leg.lots} | close=${ctxt} | absImpact≈${wtxt}`);
     }
-
     lines.push("");
   }
 
   spreadsLogEl.textContent = lines.join("\n");
 }
-
 groupToggleEl?.addEventListener("change", refreshSpreadGroups);
 
-// ---------- Portfolio calc ----------
+// ---------- Portfolio calc (Residual scan + FUT calendar spread charge) ----------
 calcBtn.addEventListener("click", () => {
   scenarioLogEl.textContent = "";
   contributorsLogEl.textContent = "";
@@ -617,43 +678,85 @@ calcBtn.addEventListener("click", () => {
   if (!first) { log("❌ No ra arrays found in SPAN."); return; }
   const L = first.ra.length;
 
+  // 1) residual scan via scenario netting
   const portfolio = new Array(L).fill(0);
   const contribs = [];
-
   const positions = readPositionsFromTable();
 
   for (const p of positions) {
     const key = `${p.symbol}|${p.month}|${p.type}|${p.type==="OPT" ? p.strike.toFixed(2) : "0.00"}`;
     const span = spanRows.find(r => spanKey(r) === key) || null;
+    if (!span) { log(`⚠️ Position not found in SPAN: ${key}`); continue; }
 
-    if (!span) {
-      log(`⚠️ Position not found in SPAN: ${key}`);
-      continue;
-    }
+    const mult = lotMult(p.symbol);
 
     const local = new Array(L).fill(0);
     for (let i = 0; i < L; i++) {
-      const v = (span.ra[i] ?? 0) * p.lots;
+      const v = (span.ra[i] ?? 0) * p.lots * mult;
       portfolio[i] += v;
       local[i] = v;
     }
-
-    contribs.push({ key, worstAbs: worstAbs(local), lots: p.lots });
+    contribs.push({ key, worstAbs: worstAbs(local), lots: p.lots, mult });
   }
 
-  let worst = 0;
+  let residual = 0;
   let worstIdx = 0;
   for (let i = 0; i < L; i++) {
     const a = Math.abs(portfolio[i]);
-    if (a > worst) { worst = a; worstIdx = i; }
+    if (a > residual) { residual = a; worstIdx = i; }
   }
 
-  portfolioWorstEl.textContent = `${worst.toFixed(2)} (scenario #${worstIdx+1})`;
-  scenarioLogEl.textContent = portfolio.slice(0, 20).map((v,i) => `S${i+1}: ${v.toFixed(2)}`).join("\n");
+  // 2) FUT calendar spread charge (intra-commodity)
+  let spreadCharge = 0;
+
+  // collect per symbol long/short FUT lots, and tiers used
+  const bySymFut = new Map(); // sym -> {longLots, shortLots, tns:[]}
+  for (const p of positions) {
+    if (p.type !== "FUT") continue;
+    const key = `${p.symbol}|${p.month}|FUT|0.00`;
+    const span = spanRows.find(r => spanKey(r) === key) || null;
+    if (!span) continue;
+
+    if (!bySymFut.has(p.symbol)) bySymFut.set(p.symbol, { longLots:0, shortLots:0, tns:[] });
+    const g = bySymFut.get(p.symbol);
+
+    if (p.lots > 0) g.longLots += p.lots;
+    if (p.lots < 0) g.shortLots += (-p.lots);
+    if (Number.isFinite(span.tn)) g.tns.push(span.tn);
+  }
+
+  for (const [sym, g] of bySymFut.entries()) {
+    const spreadLots = Math.min(g.longLots, g.shortLots);
+    if (spreadLots <= 0) continue;
+
+    const info = CCMAPS.get(sym);
+    let rate = 0;
+
+    if (info?.spreadRateByTn?.size) {
+      // conservative: max rate among tiers present in legs
+      for (const tn of g.tns) {
+        const r = info.spreadRateByTn.get(tn);
+        if (r != null && r > rate) rate = r;
+      }
+      if (rate === 0) {
+        for (const r of info.spreadRateByTn.values()) rate = Math.max(rate, r);
+      }
+    }
+
+    const mult = lotMult(sym);
+    spreadCharge += rate * spreadLots * mult;
+  }
+
+  const totalSpanApprox = residual + spreadCharge;
+
+  portfolioWorstEl.textContent = `${totalSpanApprox.toFixed(2)} (scenario #${worstIdx+1})`;
+  scenarioLogEl.textContent =
+    portfolio.slice(0, 20).map((v,i) => `S${i+1}: ${v.toFixed(2)}`).join("\n") +
+    `\n\nResidual scan: ${residual.toFixed(2)}\nSpread charge: ${spreadCharge.toFixed(2)}\nTotal approx: ${totalSpanApprox.toFixed(2)}`;
 
   contribs.sort((a,b) => b.worstAbs - a.worstAbs);
   contributorsLogEl.textContent = contribs.slice(0, 15).map(c =>
-    `${c.key} | lots=${c.lots} | abs-impact=${c.worstAbs.toFixed(2)}`
+    `${c.key} | lots=${c.lots} | lotMult=${c.mult} | abs-impact=${c.worstAbs.toFixed(2)}`
   ).join("\n");
 
   refreshSpreadGroups();
@@ -664,6 +767,8 @@ loadBtn.addEventListener("click", async () => {
   resetLog();
   bhavIndex.clear();
   spanRows = [];
+  CCMAPS = new Map();
+
   clearTable(contractsTableBody);
   posTableBody.innerHTML = "";
   portfolioWorstEl.textContent = "—";
@@ -686,7 +791,9 @@ loadBtn.addEventListener("click", async () => {
     const spanText = await readFileAsText(spanFile);
     const spanDoc = parseXml(spanText);
 
-    const baseRows = extractSpanContracts(spanDoc);
+    CCMAPS = buildCcTierAndSpreadMaps(spanDoc);
+
+    const baseRows = extractSpanContracts(spanDoc, CCMAPS);
     log(`SPAN contracts with ra: ${baseRows.length}`);
 
     log(`Reading Bhav: ${bhavFile.name}`);
@@ -707,6 +814,7 @@ loadBtn.addEventListener("click", async () => {
     renderContracts();
     exportContractsBtn.disabled = spanRows.length === 0;
 
+    log(`Lot multipliers loaded: ${LOT_MULT.size}`);
     log("✅ Loaded. Switch view to Positions to build portfolio like Kite.");
     setView(viewModeEl.value);
 
