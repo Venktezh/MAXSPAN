@@ -203,13 +203,33 @@ function raArray(contractNode) {
   const ra = contractNode.getElementsByTagName("ra")[0];
   if (!ra) return null;
 
-  const arr = [];
+  // IMPORTANT: Different contracts may list scenario nodes in different XML order.
+  // If we sum portfolios by index, we MUST align scenarios consistently.
+  // So we sort children by their numeric suffix (e.g., s1, s2 ...), falling back to DOM order.
+  const items = [];
+  let seq = 0;
   for (const ch of Array.from(ra.children)) {
-    const name = ch.tagName.toLowerCase();
+    const name = (ch.tagName || "").toLowerCase();
     if (name === "r" || name === "d") continue;
+
+    const nmatch = name.match(/(\d+)/);
+    const idx = nmatch ? Number(nmatch[1]) : NaN;
+
     const v = num(ch.textContent);
-    arr.push(v ?? 0);
+    items.push({ idx, seq, v: (v ?? 0) });
+    seq += 1;
   }
+
+  items.sort((a,b) => {
+    const aN = Number.isFinite(a.idx);
+    const bN = Number.isFinite(b.idx);
+    if (aN && bN) return a.idx - b.idx;
+    if (aN && !bN) return -1;
+    if (!aN && bN) return 1;
+    return a.seq - b.seq;
+  });
+
+  const arr = items.map(x => x.v);
   return arr.length ? arr : null;
 }
 
